@@ -1,0 +1,70 @@
+/**
+ * @anvaka/vue-llm CSS Variables
+ * 
+ * Override these in your app to customize the look of LLM components.
+ * All components use these variables with sensible defaults.
+ */
+:root {
+  /* Background colors */
+  --llm-bg: #181a1f;
+  --llm-bg-soft: #1f2228;
+  --llm-bg-mute: #242830;
+
+  /* Text colors */
+  --llm-text: #e6e8ea;
+  --llm-text-dim: #9aa0a6;
+
+  /* Border colors */
+  --llm-border: #33383f;
+  --llm-border-hover: #4b525c;
+
+  /* Accent/primary color */
+  --llm-accent: #6366f1;
+  --llm-accent-contrast: #ffffff;
+
+  /* Status colors */
+  --llm-error: #ef4444;
+  --llm-warn: #f59e0b;
+  --llm-success: #10b981;
+
+  /* Typography */
+  --llm-font-size-xs: 0.7rem;
+  --llm-font-size-sm: 0.85rem;
+  --llm-font-size-base: 1rem;
+
+  /* Spacing */
+  --llm-spacing-xs: 0.25rem;
+  --llm-spacing-sm: 0.5rem;
+  --llm-spacing-md: 0.75rem;
+  --llm-spacing-lg: 1rem;
+
+  /* Border radius */
+  --llm-radius-sm: 4px;
+  --llm-radius-md: 6px;
+  --llm-radius-lg: 8px;
+}
+
+/* Light theme support */
+html[data-theme='light'],
+[data-theme='light'] {
+  --llm-bg: #ffffff;
+  --llm-bg-soft: #f5f7fa;
+  --llm-bg-mute: #eef1f5;
+  --llm-text: #1d2125;
+  --llm-text-dim: #5e6b77;
+  --llm-border: #d3d8df;
+  --llm-border-hover: #b5bcc5;
+}
+
+/* Respect system preference */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --llm-bg: #ffffff;
+    --llm-bg-soft: #f5f7fa;
+    --llm-bg-mute: #eef1f5;
+    --llm-text: #1d2125;
+    --llm-text-dim: #5e6b77;
+    --llm-border: #d3d8df;
+    --llm-border-hover: #b5bcc5;
+  }
+}

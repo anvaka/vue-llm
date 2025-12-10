@@ -1,0 +1,15 @@
+.llm-btn { 
+  padding: var(--llm-spacing-xs, 0.25rem) var(--llm-spacing-sm, 0.5rem);
+  background: transparent; 
+  border: 1px solid var(--llm-border, #444);
+  border-radius: var(--llm-radius-sm, 4px);
+  color: var(--llm-text, #ddd);
+}
+.llm-btn:hover { border-color: var(--llm-border-hover, #666); }
+.llm-input {
+  padding: var(--llm-spacing-xs, 0.25rem) var(--llm-spacing-sm, 0.5rem);
+  border: 1px solid var(--llm-border, #444);
+  border-radius: var(--llm-radius-sm, 4px);
+  background: var(--llm-bg, #111);
+  color: var(--llm-text, #ddd);
+}

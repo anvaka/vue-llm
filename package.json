@@ -1,0 +1,33 @@
+{
+  "name": "@anvaka/vue-llm",
+  "version": "0.1.0",
+  "description": "Browser-only LLM client with provider adapters and Vue 3 components",
+  "type": "module",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./vue": {
+      "import": "./dist/vue/index.js",
+      "default": "./dist/vue/index.js"
+    },
+    "./providers": {
+      "import": "./dist/providers/index.js",
+      "default": "./dist/providers/index.js"
+    },
+    "./styles/variables.css": "./src/styles/variables.css",
+    "./styles/components.css": "./src/styles/components.css"
+    
+  },
+  "peerDependencies": {
+    "vue": ">=3.3.0"
+  },
+  "files": [
+    "dist",
+    "src/styles"
+  ]
+}
