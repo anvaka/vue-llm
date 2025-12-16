@@ -24,8 +24,8 @@
       "default": "./dist/providers/index.js"
     },
     "./styles/variables.css": "./src/styles/variables.css",
-    "./styles/components.css": "./src/styles/components.css"
-    
+    "./styles/components.css": "./src/styles/components.css",
+    "./dist/vue-llm.css": "./dist/vue-llm.css"
   },
   "peerDependencies": {
     "vue": ">=3.3.0"
