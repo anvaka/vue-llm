@@ -19,7 +19,7 @@ export class GeminiProvider extends BaseProvider {
     const request = {
       contents: this.convertToGeminiFormat(processed),
       generationConfig: {
-        temperature: options.temperature || this.config.temperature || 0.7,
+        temperature: options.temperature ?? this.config.temperature ?? 0.7,
         maxOutputTokens: options.maxTokens || this.config.maxTokens || 1000,
         topP: 0.8,
         topK: 10

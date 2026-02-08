@@ -32,7 +32,7 @@ export class OllamaProvider extends BaseProvider {
       messages: this.processMessages(messages, options),
       stream: options.stream || false,
       think: options.enableThinking || false,
-      options: { temperature: options.temperature || 0.7, num_predict: options.maxTokens || 1000 }
+      options: { temperature: options.temperature ?? 0.7, num_predict: options.maxTokens || 1000 }
     }
     if (options.enableThinking && this.capabilities.has('thinking')) {
       request.options.enable_thinking = true

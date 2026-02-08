@@ -6,7 +6,7 @@ export class CustomProvider extends BaseProvider {
     return {
       model: options.model || this.config.model || 'gpt-3.5-turbo',
       messages,
-      temperature: options.temperature || 0.7,
+      temperature: options.temperature ?? 0.7,
       max_tokens: options.maxTokens || 1000,
       stream: options.stream || false
     }

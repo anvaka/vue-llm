@@ -11,7 +11,7 @@ export class AnthropicProvider extends BaseProvider {
     const request = {
       model: options.model || this.config.model || 'claude-3-sonnet-20240229',
       max_tokens: options.maxTokens || 1000,
-      temperature: options.temperature || 0.7,
+      temperature: options.temperature ?? 0.7,
       messages: messages.filter(msg => msg.role !== 'system'),
       stream: options.stream || false
     }

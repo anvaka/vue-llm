@@ -12,7 +12,7 @@ export class GrokProvider extends BaseProvider {
     const request = {
       model: options.model || this.config.model || 'grok-beta',
       messages: this.processMessages(messages, options),
-      temperature: options.temperature || 0.7,
+      temperature: options.temperature ?? 0.7,
       max_tokens: options.maxTokens || 1000,
       stream: options.stream || false
     }

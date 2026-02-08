@@ -41,7 +41,7 @@ export class LLMClient {
       const validated = this.validateCapabilities({
         model: this.config.model,
         enableThinking: false,
-        temperature: 0.1,
+        temperature: tempConfig.temperature ?? 0.1,
         maxTokens: 10,
         stream: false
       })
@@ -94,7 +94,7 @@ export class LLMClient {
     ]
     const validated = this.validateCapabilities({
       model: this.config.model,
-      temperature: 0.1,
+      temperature: this.config.temperature ?? 0.1,
       maxTokens: 10,
       stream: false
     })

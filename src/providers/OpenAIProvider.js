@@ -21,7 +21,7 @@ export class OpenAIProvider extends BaseProvider {
     const request = {
       model,
       messages: this.processMessages(messages, options),
-      temperature: options.temperature || 0.7,
+      temperature: options.temperature ?? 0.7,
       stream: options.stream || false
     }
 

@@ -126,15 +126,18 @@
               </div>
 
               <label class="llm-field-label">Max Tokens:</label>
-              <input 
-                v-model.number="config.maxTokens" 
-                type="number" 
-                min="1" 
+              <input
+                v-model.number="config.maxTokens"
+                type="number"
+                min="1"
                 max="100000"
                 class="llm-form-control"
                 ref="maxTokensInput"
               />
             </template>
+          </div>
+          <div v-if="testResult" class="llm-test-result" :class="testResult.success ? 'llm-test-result--success' : 'llm-test-result--error'">
+            {{ testResult.message }}
           </div>
         </div>
 
@@ -1126,6 +1129,26 @@ onUnmounted(() => {
   border: 2px solid var(--llm-border, #33383f);
   border-radius: var(--llm-radius-md, 8px);
   overflow: hidden;
+}
+
+/* Test result message */
+.llm-test-result {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--llm-radius-sm, 4px);
+  font-size: var(--llm-font-size-sm, 0.85rem);
+}
+
+.llm-test-result--success {
+  background: color-mix(in srgb, var(--llm-success, #10b981) 15%, transparent);
+  border: 1px solid var(--llm-success, #10b981);
+  color: var(--llm-success, #10b981);
+}
+
+.llm-test-result--error {
+  background: color-mix(in srgb, var(--llm-error, #ef4444) 15%, transparent);
+  border: 1px solid var(--llm-error, #ef4444);
+  color: var(--llm-error, #ef4444);
 }
 
 /* Responsive */
