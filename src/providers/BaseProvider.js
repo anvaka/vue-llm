@@ -38,46 +38,47 @@ export class BaseProvider {
       const decoder = new TextDecoder()
       let fullContent = ''
       let fullThinking = ''
+      let buffer = ''
+
+      const handleLine = (line) => {
+        if (!line.trim()) return null
+        const parsed = this.parseStreamingLine(line)
+        if (!parsed) return null
+        const result = this.extractStreamingContent(parsed)
+        if (!result) return null
+        if (result.content) fullContent += result.content
+        if (result.thinking) fullThinking += result.thinking
+        onChunk({
+          content: result.content || '',
+          thinking: result.thinking || '',
+          fullContent,
+          fullThinking,
+          done: result.done || false,
+          usage: result.usage || null,
+          finishReason: result.finishReason || null
+        })
+        return result.done ? 'done' : null
+      }
 
       while (true) {
         const { done, value } = await reader.read()
-        if (done) break
+        if (done) {
+          // Flush any trailing line that wasn't terminated by a newline
+          if (buffer.length > 0) handleLine(buffer)
+          break
+        }
 
-        const chunk = decoder.decode(value, { stream: true })
-        const lines = chunk.split('\n').filter(line => line.trim())
-        
-        for (const line of lines) {
-          const parsed = this.parseStreamingLine(line)
-          if (!parsed) continue
-          
-          const result = this.extractStreamingContent(parsed)
-          if (!result) continue
-          
-          // Accumulate content
-          if (result.content) {
-            fullContent += result.content
-          }
-          if (result.thinking) {
-            fullThinking += result.thinking
-          }
-          
-          // Call with unified format
-          onChunk({
-            content: result.content || '',
-            thinking: result.thinking || '',
-            fullContent,
-            fullThinking,
-            done: result.done || false,
-            usage: result.usage || null,
-            finishReason: result.finishReason || null
-          })
-          
-          if (result.done) {
-            return fullContent
-          }
+        buffer += decoder.decode(value, { stream: true })
+
+        // Process all complete lines; keep the trailing partial line in buffer.
+        let newlineIdx
+        while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, newlineIdx)
+          buffer = buffer.slice(newlineIdx + 1)
+          if (handleLine(line) === 'done') return fullContent
         }
       }
-      
+
       return fullContent
     } catch (error) {
       if (error.name === 'AbortError') {
