@@ -116,6 +116,92 @@ export class LLMClient {
     return fullContent
   }
 
+  // Multi-turn tool-calling loop. Each iteration:
+  //  1) stream a model response (text + accumulated tool_calls)
+  //  2) append the assistant message to the conversation
+  //  3) if no tool calls → stop (the model is done)
+  //  4) otherwise execute each tool via `executors[name](args)` and append
+  //     a tool message per call, then loop
+  //
+  // `tools` is OpenAI-style ([{type:'function', function:{name, description, parameters}}]).
+  // Providers translate to native format. The caller passes `executors` as a
+  // `{ name -> async (args) => result }` map. Results are stringified into the
+  // tool message content (or used verbatim if the executor already returns a
+  // string).
+  //
+  // `onEvent` (optional) fires for: iter-start, text-delta, tool-call-delta,
+  // assistant-message, tool-call, tool-result, stop. Use it to drive a trace UI.
+  async runAgentLoop({
+    messages,
+    tools,
+    executors,
+    onEvent,
+    maxIters = 10,
+    temperature,
+    model,
+    maxTokens,
+    enableThinking
+  } = {}) {
+    await this.ensureInitialized()
+    if (!this.provider.hasCapability('tools')) {
+      throw new Error('Configured provider does not support tools')
+    }
+    const conversation = messages.slice()
+    let iter = 0
+    let stopReason = null
+    while (iter < maxIters) {
+      iter++
+      onEvent && onEvent({ type: 'iter-start', iter })
+      const validated = this.validateCapabilities({
+        messages: conversation,
+        tools,
+        stream: true,
+        model: model || this.config.model,
+        temperature: temperature ?? this.config.temperature,
+        maxTokens: maxTokens ?? this.config.maxTokens ?? 4096,
+        enableThinking: enableThinking ?? false,
+        requestId: this.generateRequestId()
+      })
+      const result = await this.provider.streamRequest(conversation, validated, (chunk) => {
+        if (chunk.content) onEvent && onEvent({ type: 'text-delta', text: chunk.content })
+        if (chunk.toolCallDelta) onEvent && onEvent({ type: 'tool-call-delta', delta: chunk.toolCallDelta })
+      })
+      const textContent = result?.content || ''
+      const toolCalls = result?.toolCalls || []
+
+      const assistantMsg = { role: 'assistant', content: textContent }
+      if (toolCalls.length) assistantMsg.tool_calls = toolCalls
+      conversation.push(assistantMsg)
+      onEvent && onEvent({ type: 'assistant-message', content: textContent, toolCalls })
+
+      if (!toolCalls.length) {
+        stopReason = 'no-tool-calls'
+        break
+      }
+
+      for (const tc of toolCalls) {
+        onEvent && onEvent({ type: 'tool-call', id: tc.id, name: tc.name, args: tc.args })
+        const exec = executors && executors[tc.name]
+        let resultText
+        if (!exec) {
+          resultText = `Error: unknown tool '${tc.name}'`
+        } else {
+          try {
+            const out = await exec(tc.args || {})
+            resultText = typeof out === 'string' ? out : JSON.stringify(out ?? '')
+          } catch (err) {
+            resultText = `Error: ${err?.message || String(err)}`
+          }
+        }
+        conversation.push({ role: 'tool', tool_call_id: tc.id, content: resultText })
+        onEvent && onEvent({ type: 'tool-result', id: tc.id, name: tc.name, content: resultText })
+      }
+    }
+    if (!stopReason) stopReason = 'max-iters'
+    onEvent && onEvent({ type: 'stop', reason: stopReason, iterations: iter })
+    return { messages: conversation, iterations: iter, stopReason }
+  }
+
   generateRequestId() {
     return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
   }

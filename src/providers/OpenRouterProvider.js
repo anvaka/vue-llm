@@ -1,4 +1,5 @@
 import { BaseProvider } from './BaseProvider.js'
+import { convertMessagesToOpenAI } from './OpenAIProvider.js'
 
 export class OpenRouterProvider extends BaseProvider {
   async detectCapabilities() {
@@ -26,8 +27,9 @@ export class OpenRouterProvider extends BaseProvider {
     return request
   }
   processMessages(messages, options) {
-    if (options.images && this.capabilities.has('vision')) return this.addImagesToMessages(messages, options.images)
-    return messages
+    const converted = convertMessagesToOpenAI(messages)
+    if (options.images && this.capabilities.has('vision')) return this.addImagesToMessages(converted, options.images)
+    return converted
   }
   addImagesToMessages(messages, images) {
     const lastMessage = messages[messages.length - 1]
@@ -44,8 +46,16 @@ export class OpenRouterProvider extends BaseProvider {
     return headers
   }
   processResponse(response) {
-    const result = { content: response.choices?.[0]?.message?.content || '', usage: response.usage || null, finishReason: mapFinishReason(response.choices?.[0]?.finish_reason) }
-    if (response.choices?.[0]?.message?.reasoning) result.thinking = response.choices[0].message.reasoning
+    const msg = response.choices?.[0]?.message
+    const result = { content: msg?.content || '', usage: response.usage || null, finishReason: mapFinishReason(response.choices?.[0]?.finish_reason) }
+    if (msg?.reasoning) result.thinking = msg.reasoning
+    if (Array.isArray(msg?.tool_calls)) {
+      result.toolCalls = msg.tool_calls.map(tc => ({
+        id: tc.id,
+        name: tc.function?.name,
+        args: parseArgs(tc.function?.arguments)
+      }))
+    }
     return result
   }
   parseStreamingLine(line) {
@@ -56,8 +66,25 @@ export class OpenRouterProvider extends BaseProvider {
   }
   extractStreamingContent(parsed) {
     if (parsed.done) return { done: true }
-    const delta = parsed.choices?.[0]?.delta
-    return { content: delta?.content || '', thinking: delta?.reasoning || '', done: false, usage: parsed.usage || null, finishReason: mapFinishReason(parsed.choices?.[0]?.finish_reason) }
+    const choice = parsed.choices?.[0]
+    const delta = choice?.delta
+    if (delta && Array.isArray(delta.tool_calls) && delta.tool_calls.length) {
+      const tc = delta.tool_calls[0]
+      return {
+        content: delta.content || '',
+        thinking: delta.reasoning || '',
+        done: false,
+        usage: parsed.usage || null,
+        finishReason: mapFinishReason(choice?.finish_reason),
+        toolCallDelta: {
+          index: tc.index ?? 0,
+          id: tc.id || undefined,
+          name: tc.function?.name || undefined,
+          argsTextDelta: tc.function?.arguments || ''
+        }
+      }
+    }
+    return { content: delta?.content || '', thinking: delta?.reasoning || '', done: false, usage: parsed.usage || null, finishReason: mapFinishReason(choice?.finish_reason) }
   }
   getApiPath() { return '/v1/chat/completions' }
   requiresAuth() { return !!this.config.apiKey }
@@ -83,3 +110,8 @@ export class OpenRouterProvider extends BaseProvider {
   }
 }
 function mapFinishReason(reason) { if (!reason) return null; const r = String(reason).toLowerCase(); if (r === 'length' || r === 'max_tokens') return 'length'; return r }
+
+function parseArgs(text) {
+  if (!text) return {}
+  try { return JSON.parse(text) } catch { return { __parseError: true, raw: text } }
+}

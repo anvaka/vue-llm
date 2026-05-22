@@ -1,5 +1,6 @@
 import { OpenAIProvider } from './OpenAIProvider.js'
 import { AnthropicProvider } from './AnthropicProvider.js'
+import { BedrockProvider } from './BedrockProvider.js'
 import { GrokProvider } from './GrokProvider.js'
 import { GeminiProvider } from './GeminiProvider.js'
 import { OllamaProvider } from './OllamaProvider.js'
@@ -10,6 +11,7 @@ import { CustomProvider } from './CustomProvider.js'
 export const PROVIDERS = {
   OPENAI: 'openai',
   ANTHROPIC: 'anthropic',
+  BEDROCK: 'bedrock',
   GROK: 'grok',
   GEMINI: 'gemini',
   OLLAMA: 'ollama',
@@ -21,6 +23,7 @@ export const PROVIDERS = {
 export const DEFAULT_CONFIGS = {
   [PROVIDERS.OPENAI]: { name: 'OpenAI', baseUrl: 'https://api.openai.com', requiresApiKey: true },
   [PROVIDERS.ANTHROPIC]: { name: 'Anthropic', baseUrl: 'https://api.anthropic.com', requiresApiKey: true },
+  [PROVIDERS.BEDROCK]: { name: 'AWS Bedrock', baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com', requiresApiKey: true },
   [PROVIDERS.GROK]: { name: 'Grok', baseUrl: 'https://api.x.ai', requiresApiKey: true },
   [PROVIDERS.GEMINI]: { name: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com', requiresApiKey: true },
   [PROVIDERS.OLLAMA]: { name: 'Ollama (Native)', baseUrl: 'http://localhost:11434', requiresApiKey: false },
@@ -33,6 +36,7 @@ export function createProvider(providerType, config) {
   switch (providerType) {
     case PROVIDERS.OPENAI: return new OpenAIProvider(config)
     case PROVIDERS.ANTHROPIC: return new AnthropicProvider(config)
+    case PROVIDERS.BEDROCK: return new BedrockProvider(config)
     case PROVIDERS.GROK: return new GrokProvider(config)
     case PROVIDERS.GEMINI: return new GeminiProvider(config)
     case PROVIDERS.OLLAMA: return new OllamaProvider(config)

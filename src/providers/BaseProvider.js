@@ -26,19 +26,39 @@ export class BaseProvider {
   async streamRequest(messages, options, onChunk) {
     const request = this.prepareRequest(messages, options)
     const abortController = new AbortController()
-    
+
     // Store request for cancellation
     const requestId = options.requestId || this.generateRequestId()
     this.activeRequests.set(requestId, abortController)
-    
+
     try {
       const response = await this.makeStreamingRequest(request, abortController.signal)
-      
+
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let fullContent = ''
       let fullThinking = ''
       let buffer = ''
+      // Per-call accumulator for tool calls, keyed by index (both Anthropic
+      // and OpenAI/OpenRouter index content blocks by position). Providers
+      // surface `toolCallDelta: {index, id?, name?, argsTextDelta?}` from
+      // extractStreamingContent; we stitch the args text fragments here and
+      // parse JSON once the stream finishes.
+      const toolCallsByIndex = new Map()
+
+      const finalizeToolCalls = () => {
+        const arr = Array.from(toolCallsByIndex.values())
+          .sort((a, b) => a.index - b.index)
+          .map(t => {
+            let args = {}
+            if (t.argsText) {
+              try { args = JSON.parse(t.argsText) }
+              catch { args = { __parseError: true, raw: t.argsText } }
+            }
+            return { id: t.id, name: t.name, args }
+          })
+        return arr
+      }
 
       const handleLine = (line) => {
         if (!line.trim()) return null
@@ -48,16 +68,32 @@ export class BaseProvider {
         if (!result) return null
         if (result.content) fullContent += result.content
         if (result.thinking) fullThinking += result.thinking
+        if (result.toolCallDelta) {
+          const d = result.toolCallDelta
+          let entry = toolCallsByIndex.get(d.index)
+          if (!entry) {
+            entry = { index: d.index, id: d.id || null, name: d.name || '', argsText: '' }
+            toolCallsByIndex.set(d.index, entry)
+          } else {
+            if (d.id) entry.id = d.id
+            if (d.name) entry.name = d.name
+          }
+          if (d.argsTextDelta) entry.argsText += d.argsTextDelta
+        }
+        const isDone = result.done || false
+        const fullToolCalls = isDone ? finalizeToolCalls() : null
         onChunk({
           content: result.content || '',
           thinking: result.thinking || '',
           fullContent,
           fullThinking,
-          done: result.done || false,
+          done: isDone,
           usage: result.usage || null,
-          finishReason: result.finishReason || null
+          finishReason: result.finishReason || null,
+          toolCallDelta: result.toolCallDelta || null,
+          toolCalls: fullToolCalls
         })
-        return result.done ? 'done' : null
+        return isDone ? 'done' : null
       }
 
       while (true) {
@@ -75,11 +111,13 @@ export class BaseProvider {
         while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
           const line = buffer.slice(0, newlineIdx)
           buffer = buffer.slice(newlineIdx + 1)
-          if (handleLine(line) === 'done') return fullContent
+          if (handleLine(line) === 'done') {
+            return { content: fullContent, toolCalls: finalizeToolCalls() }
+          }
         }
       }
 
-      return fullContent
+      return { content: fullContent, toolCalls: finalizeToolCalls() }
     } catch (error) {
       if (error.name === 'AbortError') {
         throw new Error('Request cancelled')

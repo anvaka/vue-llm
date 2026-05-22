@@ -53,10 +53,11 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   processMessages(messages, options) {
+    const converted = convertMessagesToOpenAI(messages)
     if (options.images && this.capabilities.has('vision')) {
-      return this.addImagesToMessages(messages, options.images)
+      return this.addImagesToMessages(converted, options.images)
     }
-    return messages
+    return converted
   }
 
   addImagesToMessages(messages, images) {
@@ -75,13 +76,21 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   processResponse(response) {
+    const msg = response.choices?.[0]?.message
     const result = {
-      content: response.choices?.[0]?.message?.content || '',
+      content: msg?.content || '',
       usage: response.usage || null,
       finishReason: response.choices?.[0]?.finish_reason || null
     }
     if (response.reasoning) {
       result.thinking = response.reasoning
+    }
+    if (Array.isArray(msg?.tool_calls)) {
+      result.toolCalls = msg.tool_calls.map(tc => ({
+        id: tc.id,
+        name: tc.function?.name,
+        args: parseArgs(tc.function?.arguments)
+      }))
     }
     return result
   }
@@ -95,13 +104,35 @@ export class OpenAIProvider extends BaseProvider {
 
   extractStreamingContent(parsed) {
     if (parsed.done) return { done: true }
-    const delta = parsed.choices?.[0]?.delta
+    const choice = parsed.choices?.[0]
+    const delta = choice?.delta
+    if (delta && Array.isArray(delta.tool_calls) && delta.tool_calls.length) {
+      // OpenAI streams tool_calls as an array of partial fragments per chunk.
+      // Each fragment has `index` and may include id / function.name / function.arguments
+      // (the arguments are a streaming JSON-text string). We only handle the
+      // first fragment per chunk here — multi-fragment chunks would need an
+      // outer loop, but in practice each delta carries one tool call slot.
+      const tc = delta.tool_calls[0]
+      return {
+        content: delta.content || '',
+        thinking: delta.reasoning || '',
+        done: false,
+        usage: parsed.usage || null,
+        finishReason: choice?.finish_reason || null,
+        toolCallDelta: {
+          index: tc.index ?? 0,
+          id: tc.id || undefined,
+          name: tc.function?.name || undefined,
+          argsTextDelta: tc.function?.arguments || ''
+        }
+      }
+    }
     return {
       content: delta?.content || '',
       thinking: delta?.reasoning || '',
       done: false,
       usage: parsed.usage || null,
-      finishReason: parsed.choices?.[0]?.finish_reason || null
+      finishReason: choice?.finish_reason || null
     }
   }
 
@@ -114,4 +145,32 @@ export class OpenAIProvider extends BaseProvider {
       return id.includes('gpt') || id.includes('chat')
     }).map(m => m.id).sort() || []
   }
+}
+
+function parseArgs(text) {
+  if (!text) return {}
+  try { return JSON.parse(text) } catch { return { __parseError: true, raw: text } }
+}
+
+// Canonical in-memory messages use { tool_calls: [{id, name, args}] } on the
+// assistant message. OpenAI's wire format wants { tool_calls: [{id, type, function:{name, arguments:string}}] }.
+// Tool messages are already in wire format.
+export function convertMessagesToOpenAI(messages) {
+  return messages.map(m => {
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) {
+      return {
+        role: 'assistant',
+        content: m.content ?? null,
+        tool_calls: m.tool_calls.map(tc => ({
+          id: tc.id,
+          type: 'function',
+          function: {
+            name: tc.name,
+            arguments: typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args || {})
+          }
+        }))
+      }
+    }
+    return m
+  })
 }
