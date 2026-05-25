@@ -2,16 +2,18 @@ import { BaseProvider } from './BaseProvider.js'
 
 export class GeminiProvider extends BaseProvider {
   async detectCapabilities() {
-    if (!this.config.model) return
-    if (this.config.model.includes('gemini-pro-vision') || this.config.model.includes('gemini-1.5') || this.config.model.includes('gemini-2.0')) {
-      this.capabilities.add('vision')
-    }
-    if (this.config.model.includes('gemini-pro') || this.config.model.includes('gemini-1.5') || this.config.model.includes('gemini-2.0')) {
-      this.capabilities.add('tools')
-    }
-    if (this.config.model.includes('gemini-2.0')) {
-      this.capabilities.add('thinking')
-    }
+    const id = this.config.model
+    if (!id) return
+    // Every modern Gemini family member (1.5, 2.0, 2.5, …) supports tools and
+    // vision. Match the version with a regex instead of an enumerated list so
+    // new releases don't silently lose capabilities.
+    const versionMatch = id.match(/gemini-(\d+)\.(\d+)/)
+    const major = versionMatch ? Number(versionMatch[1]) : null
+    const minor = versionMatch ? Number(versionMatch[2]) : null
+    const atLeast = (M, m) => major != null && (major > M || (major === M && minor >= m))
+    if (id.includes('gemini-pro-vision') || atLeast(1, 5)) this.capabilities.add('vision')
+    if (id.includes('gemini-pro') || atLeast(1, 5)) this.capabilities.add('tools')
+    if (atLeast(2, 0)) this.capabilities.add('thinking')
   }
 
   prepareRequest(messages, options) {
@@ -37,10 +39,62 @@ export class GeminiProvider extends BaseProvider {
     return request
   }
 
+  // Build a {tool_call_id -> function name} index from prior assistant
+  // messages so tool-result messages can be reshaped into Gemini's
+  // functionResponse (which requires the function name to match).
+  buildToolCallNameIndex(messages) {
+    const index = new Map()
+    for (const m of messages) {
+      if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
+        for (const tc of m.tool_calls) {
+          if (tc.id) index.set(tc.id, tc.name)
+        }
+      }
+    }
+    return index
+  }
+
   convertToGeminiFormat(messages) {
+    const nameIndex = this.buildToolCallNameIndex(messages)
     const contents = []
     for (const message of messages) {
       if (message.role === 'system') continue
+
+      if (message.role === 'tool') {
+        const fnName = message.name || nameIndex.get(message.tool_call_id) || 'unknown'
+        // Gemini's functionResponse.response must be a Struct (object). Parse
+        // strings to JSON when possible, but always wrap primitives/arrays in
+        // `{result: <value>}` so the proto schema accepts them.
+        let response = message.content
+        if (typeof response === 'string') {
+          try {
+            const parsed = JSON.parse(response)
+            response = (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed))
+              ? parsed
+              : { result: parsed }
+          } catch {
+            response = { result: message.content }
+          }
+        } else if (response === null || typeof response !== 'object' || Array.isArray(response)) {
+          response = { result: response }
+        }
+        contents.push({
+          role: 'user',
+          parts: [{ functionResponse: { name: fnName, response } }]
+        })
+        continue
+      }
+
+      if (message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length) {
+        const parts = []
+        if (message.content) parts.push({ text: String(message.content) })
+        for (const tc of message.tool_calls) {
+          parts.push({ functionCall: { name: tc.name, args: typeof tc.args === 'string' ? safeParse(tc.args) : (tc.args || {}) } })
+        }
+        contents.push({ role: 'model', parts })
+        continue
+      }
+
       const role = message.role === 'assistant' ? 'model' : 'user'
       if (Array.isArray(message.content)) {
         const parts = message.content.map(part => {
@@ -80,12 +134,15 @@ export class GeminiProvider extends BaseProvider {
     const result = { content: '', usage: null, finishReason: null }
     if (response.candidates && response.candidates.length > 0) {
       const candidate = response.candidates[0]
-      if (candidate.content?.parts) {
-        result.content = candidate.content.parts.filter(p => p.text).map(p => p.text).join('')
-      }
-      if (candidate.content?.parts) {
-        const functionCalls = candidate.content.parts.filter(p => p.functionCall)
-        if (functionCalls.length > 0) result.functionCalls = functionCalls
+      const parts = candidate.content?.parts || []
+      result.content = parts.filter(p => p.text).map(p => p.text).join('')
+      const fnCalls = parts.filter(p => p.functionCall).map(p => p.functionCall)
+      if (fnCalls.length) {
+        result.toolCalls = fnCalls.map((fc, i) => ({
+          id: synthId(i),
+          name: fc.name,
+          args: fc.args || {}
+        }))
       }
       if (candidate.finishReason) result.finishReason = mapFinishReason(candidate.finishReason)
     }
@@ -99,62 +156,58 @@ export class GeminiProvider extends BaseProvider {
     return result
   }
 
-  async streamRequest(messages, options, onChunk) {
-    const request = this.prepareRequest(messages, options)
-    const abortController = new AbortController()
-    const requestId = options.requestId || this.generateRequestId()
-    this.activeRequests.set(requestId, abortController)
-    try {
-      const response = await this.makeStreamingRequest(request, abortController.signal)
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      let fullContent = ''
-      let fullThinking = ''
-      let buffer = ''
-      let objectDepth = 0
-      let currentObjectStart = 0
-      let inString = false
-      let escaped = false
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        for (let i = currentObjectStart; i < buffer.length; i++) {
-          const char = buffer[i]
-          if (escaped) { escaped = false; continue }
-          if (char === '\\' && inString) { escaped = true; continue }
-          if (char === '"') { inString = !inString; continue }
-          if (!inString) {
-            if (char === '{') { if (objectDepth === 0) currentObjectStart = i; objectDepth++ }
-            else if (char === '}') { objectDepth--; if (objectDepth === 0) { const jsonStr = buffer.slice(currentObjectStart, i + 1); try { const parsed = JSON.parse(jsonStr); const result = this.extractStreamingContent(parsed); if (result) { if (result.content) fullContent += result.content; if (result.thinking) fullThinking += result.thinking; onChunk({ content: result.content || '', thinking: result.thinking || '', fullContent, fullThinking, done: result.done || false, usage: result.usage || null, finishReason: result.finishReason || null }); if (result.done) return fullContent } } catch {} currentObjectStart = i + 1 } }
-          }
-        }
-        if (objectDepth === 0 && currentObjectStart < buffer.length) { buffer = buffer.slice(currentObjectStart); currentObjectStart = 0 }
-      }
-      return fullContent
-    } catch (error) {
-      if (error.name === 'AbortError') throw new Error('Request cancelled')
-      throw error
-    } finally { this.activeRequests.delete(requestId) }
+  parseStreamingLine(line) {
+    // Gemini's streamGenerateContent with ?alt=sse emits SSE events: `data: {...}`.
+    // There is no `[DONE]` sentinel — the stream just closes when the candidate's
+    // finishReason has been delivered.
+    if (!line.startsWith('data: ')) return null
+    const data = line.slice(6).trim()
+    if (!data) return null
+    try { return JSON.parse(data) } catch { return null }
   }
 
   extractStreamingContent(parsed) {
-    if (!parsed?.candidates?.length) return null
+    if (!parsed?.candidates?.length) {
+      return { content: '', thinking: '', done: false }
+    }
     const candidate = parsed.candidates[0]
     let content = ''
     let thinking = ''
     let done = false
     let finishReason = null
-    if (candidate.content?.parts) {
-      content = candidate.content.parts.filter(p => p.text).map(p => p.text).join('')
-    }
+    const parts = candidate.content?.parts || []
+    content = parts.filter(p => p.text).map(p => p.text).join('')
+    const fnCalls = parts.filter(p => p.functionCall).map(p => p.functionCall)
     if (candidate.finishReason) { done = true; finishReason = mapFinishReason(candidate.finishReason) }
     if (parsed.usageMetadata?.thoughtsTokenCount > 0) { thinking = `[Thinking: ${parsed.usageMetadata.thoughtsTokenCount} tokens]` }
-    return { content, thinking, done, usage: parsed.usageMetadata ? { promptTokens: parsed.usageMetadata.promptTokenCount, completionTokens: parsed.usageMetadata.candidatesTokenCount, totalTokens: parsed.usageMetadata.totalTokenCount } : null, finishReason }
+    const out = {
+      content,
+      thinking,
+      done,
+      usage: parsed.usageMetadata ? {
+        promptTokens: parsed.usageMetadata.promptTokenCount,
+        completionTokens: parsed.usageMetadata.candidatesTokenCount,
+        totalTokens: parsed.usageMetadata.totalTokenCount
+      } : null,
+      finishReason
+    }
+    if (fnCalls.length) {
+      // Gemini delivers each functionCall fully formed (not character-streamed).
+      // Emit them as batch deltas so BaseProvider's accumulator can build the
+      // canonical toolCalls array. JSON-stringify args because the accumulator
+      // parses argsText back into an object.
+      out.toolCallDeltas = fnCalls.map((fc, i) => ({
+        index: i,
+        id: synthId(i),
+        name: fc.name || '',
+        argsTextDelta: JSON.stringify(fc.args ?? {})
+      }))
+    }
+    return out
   }
 
   getApiPath() { const model = this.config.model || 'gemini-pro'; return `/v1beta/models/${model}:generateContent` }
-  getStreamingEndpoint() { const model = this.config.model || 'gemini-pro'; return `${this.config.baseUrl}/v1beta/models/${model}:streamGenerateContent` }
+  getStreamingEndpoint() { const model = this.config.model || 'gemini-pro'; return `${this.config.baseUrl}/v1beta/models/${model}:streamGenerateContent?alt=sse` }
   requiresAuth() { return !!this.config.apiKey }
   getAuthHeaderName() { return 'x-goog-api-key' }
   getAuthHeaderValue() { return this.config.apiKey }
@@ -168,4 +221,10 @@ function mapFinishReason(reason) {
   const r = String(reason).toLowerCase()
   if (r.includes('max') && r.includes('token')) return 'length'
   return r
+}
+
+function synthId(i) { return `gemini_call_${i}` }
+
+function safeParse(text) {
+  try { return JSON.parse(text) } catch { return {} }
 }

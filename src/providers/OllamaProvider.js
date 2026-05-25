@@ -37,12 +37,17 @@ export class OllamaProvider extends BaseProvider {
     if (options.enableThinking && this.capabilities.has('thinking')) {
       request.options.enable_thinking = true
     }
+    if (options.tools && this.capabilities.has('tools')) {
+      // Ollama accepts OpenAI-style tool definitions verbatim.
+      request.tools = options.tools
+    }
     return request
   }
 
   processMessages(messages, options) {
-    if (options.images && this.capabilities.has('vision')) return this.addImagesToMessages(messages, options.images)
-    return messages
+    const converted = convertMessagesToOllama(messages)
+    if (options.images && this.capabilities.has('vision')) return this.addImagesToMessages(converted, options.images)
+    return converted
   }
 
   addImagesToMessages(messages, images) {
@@ -54,8 +59,20 @@ export class OllamaProvider extends BaseProvider {
   }
 
   processResponse(response) {
-    const result = { content: response.message?.content || '', usage: response.eval_count ? { tokens: response.eval_count } : null, finishReason: mapFinishReason(response.finish_reason) }
+    const result = {
+      content: response.message?.content || '',
+      usage: response.eval_count ? { tokens: response.eval_count } : null,
+      finishReason: mapFinishReason(response.finish_reason)
+    }
     if (response.thinking) result.thinking = response.thinking
+    const calls = response.message?.tool_calls
+    if (Array.isArray(calls) && calls.length) {
+      result.toolCalls = calls.map((tc, i) => ({
+        id: synthId(i),
+        name: tc.function?.name,
+        args: normalizeArgs(tc.function?.arguments)
+      }))
+    }
     return result
   }
 
@@ -64,7 +81,27 @@ export class OllamaProvider extends BaseProvider {
   }
 
   extractStreamingContent(parsed) {
-    return { content: parsed.message?.content || '', thinking: parsed.thinking || '', done: parsed.done || false, usage: parsed.eval_count ? { tokens: parsed.eval_count } : null, finishReason: mapFinishReason(parsed.finish_reason) }
+    const out = {
+      content: parsed.message?.content || '',
+      thinking: parsed.thinking || parsed.message?.thinking || '',
+      done: parsed.done || false,
+      usage: parsed.eval_count ? { tokens: parsed.eval_count } : null,
+      finishReason: mapFinishReason(parsed.finish_reason)
+    }
+    const calls = parsed.message?.tool_calls
+    if (Array.isArray(calls) && calls.length) {
+      // Ollama delivers tool_calls fully formed in one chunk (usually the final
+      // one). Emit each as a synthetic delta so BaseProvider's accumulator can
+      // produce the canonical toolCalls array. JSON-stringify the object args
+      // because the accumulator parses argsText back into an object.
+      out.toolCallDeltas = calls.map((tc, i) => ({
+        index: i,
+        id: synthId(i),
+        name: tc.function?.name || '',
+        argsTextDelta: JSON.stringify(tc.function?.arguments ?? {})
+      }))
+    }
+    return out
   }
 
   getApiPath() { return '/api/chat' }
@@ -78,4 +115,45 @@ function mapFinishReason(reason) {
   const r = String(reason).toLowerCase()
   if (r === 'max_tokens') return 'length'
   return r
+}
+
+function synthId(i) { return `ollama_call_${i}` }
+
+function normalizeArgs(args) {
+  if (args == null) return {}
+  if (typeof args === 'string') {
+    try { return JSON.parse(args) } catch { return { __parseError: true, raw: args } }
+  }
+  return args
+}
+
+// Reshape canonical in-memory messages into Ollama's wire format. The codebase
+// stores assistant tool calls as `{tool_calls: [{id, name, args}]}` and tool
+// results in OpenAI wire form `{role:'tool', tool_call_id, content}`. Ollama
+// wants `{function:{name, arguments:<object>}}` (no id, no type wrapper) and
+// `{role:'tool', content}` with no tool_call_id. Match is positional.
+export function convertMessagesToOllama(messages) {
+  return messages.map(m => {
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) {
+      return {
+        role: 'assistant',
+        content: m.content ?? '',
+        tool_calls: m.tool_calls.map(tc => ({
+          function: {
+            name: tc.name,
+            arguments: typeof tc.args === 'string' ? safeParse(tc.args) : (tc.args || {})
+          }
+        }))
+      }
+    }
+    if (m.role === 'tool') {
+      const { tool_call_id, ...rest } = m
+      return rest
+    }
+    return m
+  })
+}
+
+function safeParse(text) {
+  try { return JSON.parse(text) } catch { return {} }
 }

@@ -168,11 +168,16 @@ export class LLMClient {
       })
       const textContent = result?.content || ''
       const toolCalls = result?.toolCalls || []
+      const thinking = result?.thinking || ''
 
       const assistantMsg = { role: 'assistant', content: textContent }
       if (toolCalls.length) assistantMsg.tool_calls = toolCalls
+      // Some providers (e.g. DeepSeek's thinking-mode models) reject subsequent
+      // requests unless the prior assistant reasoning is echoed back. Stash it
+      // on the message; providers decide whether to serialize it on the wire.
+      if (thinking) assistantMsg.thinking = thinking
       conversation.push(assistantMsg)
-      onEvent && onEvent({ type: 'assistant-message', content: textContent, toolCalls })
+      onEvent && onEvent({ type: 'assistant-message', content: textContent, toolCalls, thinking })
 
       if (!toolCalls.length) {
         stopReason = 'no-tool-calls'

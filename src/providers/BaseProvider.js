@@ -68,8 +68,13 @@ export class BaseProvider {
         if (!result) return null
         if (result.content) fullContent += result.content
         if (result.thinking) fullThinking += result.thinking
-        if (result.toolCallDelta) {
-          const d = result.toolCallDelta
+        // Providers can return a single `toolCallDelta` (OpenAI-style streaming
+        // chunks) or a batch `toolCallDeltas` array (Ollama delivers all
+        // tool_calls in one final chunk).
+        const deltas = Array.isArray(result.toolCallDeltas)
+          ? result.toolCallDeltas
+          : (result.toolCallDelta ? [result.toolCallDelta] : [])
+        for (const d of deltas) {
           let entry = toolCallsByIndex.get(d.index)
           if (!entry) {
             entry = { index: d.index, id: d.id || null, name: d.name || '', argsText: '' }
@@ -112,12 +117,12 @@ export class BaseProvider {
           const line = buffer.slice(0, newlineIdx)
           buffer = buffer.slice(newlineIdx + 1)
           if (handleLine(line) === 'done') {
-            return { content: fullContent, toolCalls: finalizeToolCalls() }
+            return { content: fullContent, thinking: fullThinking, toolCalls: finalizeToolCalls() }
           }
         }
       }
 
-      return { content: fullContent, toolCalls: finalizeToolCalls() }
+      return { content: fullContent, thinking: fullThinking, toolCalls: finalizeToolCalls() }
     } catch (error) {
       if (error.name === 'AbortError') {
         throw new Error('Request cancelled')

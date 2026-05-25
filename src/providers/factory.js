@@ -6,6 +6,7 @@ import { GeminiProvider } from './GeminiProvider.js'
 import { OllamaProvider } from './OllamaProvider.js'
 import { LlamaServerProvider } from './LlamaServerProvider.js'
 import { OpenRouterProvider } from './OpenRouterProvider.js'
+import { DeepSeekProvider } from './DeepSeekProvider.js'
 import { CustomProvider } from './CustomProvider.js'
 
 export const PROVIDERS = {
@@ -17,6 +18,7 @@ export const PROVIDERS = {
   OLLAMA: 'ollama',
   LLAMA_SERVER: 'llama-server',
   OPENROUTER: 'openrouter',
+  DEEPSEEK: 'deepseek',
   CUSTOM: 'custom'
 }
 
@@ -29,6 +31,7 @@ export const DEFAULT_CONFIGS = {
   [PROVIDERS.OLLAMA]: { name: 'Ollama (Native)', baseUrl: 'http://localhost:11434', requiresApiKey: false },
   [PROVIDERS.LLAMA_SERVER]: { name: 'Local Llama Server', baseUrl: 'http://localhost:8080', requiresApiKey: false },
   [PROVIDERS.OPENROUTER]: { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api', requiresApiKey: true },
+  [PROVIDERS.DEEPSEEK]: { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com', requiresApiKey: true },
   [PROVIDERS.CUSTOM]: { name: 'Custom OpenAI Compatible', baseUrl: '', requiresApiKey: false }
 }
 
@@ -42,6 +45,7 @@ export function createProvider(providerType, config) {
     case PROVIDERS.OLLAMA: return new OllamaProvider(config)
     case PROVIDERS.LLAMA_SERVER: return new LlamaServerProvider(config)
     case PROVIDERS.OPENROUTER: return new OpenRouterProvider(config)
+    case PROVIDERS.DEEPSEEK: return new DeepSeekProvider(config)
     case PROVIDERS.CUSTOM: return new CustomProvider(config)
     default: throw new Error(`Unknown provider type: ${providerType}`)
   }

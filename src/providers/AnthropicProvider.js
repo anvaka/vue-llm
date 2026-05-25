@@ -10,12 +10,21 @@ export class AnthropicProvider extends BaseProvider {
 
   prepareRequest(messages, options) {
     const converted = convertMessagesToAnthropic(messages)
+    const model = options.model || this.config.model || 'claude-3-sonnet-20240229'
     const request = {
-      model: options.model || this.config.model || 'claude-3-sonnet-20240229',
+      model,
       max_tokens: options.maxTokens || 1000,
-      temperature: options.temperature ?? 0.7,
       messages: converted,
       stream: options.stream || false
+    }
+    // Claude Opus 4.7 deprecated `temperature` (along with top_p / top_k);
+    // non-default values return 400 ("temperature is deprecated for this
+    // model."). Older models — including claude-opus-4-6, claude-sonnet-4-6,
+    // claude-haiku-4-5, and the 3.x family — still accept temperature. Match
+    // as a substring so Bedrock inference profiles (us.anthropic.claude-opus-
+    // 4-7-…) and any dated suffix variants are also covered.
+    if (!model.includes('claude-opus-4-7')) {
+      request.temperature = options.temperature ?? 0.7
     }
     const systemMessage = messages.find(msg => msg.role === 'system')
     if (systemMessage) request.system = systemMessage.content

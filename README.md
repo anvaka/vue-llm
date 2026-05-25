@@ -3,7 +3,7 @@
 Browser-only LLM client + Vue 3 plugin, provider adapters, and lightweight components.
 
 ## Features
-- Provider factory with 8 built-in providers (OpenAI, Anthropic, Grok, Gemini, Ollama, Llama Server, OpenRouter, Custom) – extend with `registerProvider()`
+- Provider factory with 10 built-in providers (OpenAI, Anthropic, Bedrock, Grok, Gemini, Ollama, Llama Server, OpenRouter, DeepSeek, Custom) – extend with `registerProvider()`
 - LocalStorage-based config store (custom storage adapter supported)
 - Streaming + promise requests via `llmClient.stream()`
 - Vue plugin for dependency injection
@@ -150,7 +150,7 @@ registerProvider('my-provider', MyProvider)
 // From '@anvaka/vue-llm/providers'
 import { 
   BaseProvider,
-  PROVIDERS,           // { OPENAI, ANTHROPIC, GROK, GEMINI, OLLAMA, LLAMA_SERVER, OPENROUTER, CUSTOM }
+  PROVIDERS,           // { OPENAI, ANTHROPIC, BEDROCK, GROK, GEMINI, OLLAMA, LLAMA_SERVER, OPENROUTER, DEEPSEEK, CUSTOM }
   DEFAULT_CONFIGS,     // Default configs for each provider type
   createProvider,      // (type, config) => Provider
   registerProvider,    // (type, ProviderClass) => void
