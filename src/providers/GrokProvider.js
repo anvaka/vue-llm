@@ -1,4 +1,5 @@
 import { BaseProvider } from './BaseProvider.js'
+import { convertMessagesToOpenAI } from './OpenAIProvider.js'
 
 export class GrokProvider extends BaseProvider {
   async detectCapabilities() {
@@ -16,13 +17,17 @@ export class GrokProvider extends BaseProvider {
       max_tokens: options.maxTokens || 1000,
       stream: options.stream || false
     }
-    if (options.tools && this.capabilities.has('tools')) request.tools = options.tools
+    if (options.tools && this.capabilities.has('tools')) {
+      request.tools = options.tools
+      if (options.tool_choice) request.tool_choice = options.tool_choice
+    }
     return request
   }
 
   processMessages(messages, options) {
-    if (options.images && this.capabilities.has('vision')) return this.addImagesToMessages(messages, options.images)
-    return messages
+    const converted = convertMessagesToOpenAI(messages)
+    if (options.images && this.capabilities.has('vision')) return this.addImagesToMessages(converted, options.images)
+    return converted
   }
 
   addImagesToMessages(messages, images) {
@@ -36,7 +41,20 @@ export class GrokProvider extends BaseProvider {
   }
 
   processResponse(response) {
-    return { content: response.choices?.[0]?.message?.content || '', usage: response.usage || null, finishReason: mapFinishReason(response.choices?.[0]?.finish_reason) }
+    const msg = response.choices?.[0]?.message
+    const result = {
+      content: msg?.content || '',
+      usage: response.usage || null,
+      finishReason: mapFinishReason(response.choices?.[0]?.finish_reason)
+    }
+    if (Array.isArray(msg?.tool_calls)) {
+      result.toolCalls = msg.tool_calls.map(tc => ({
+        id: tc.id,
+        name: tc.function?.name,
+        args: parseArgs(tc.function?.arguments)
+      }))
+    }
+    return result
   }
 
   parseStreamingLine(line) {
@@ -48,8 +66,24 @@ export class GrokProvider extends BaseProvider {
 
   extractStreamingContent(parsed) {
     if (parsed.done) return { done: true }
-    const delta = parsed.choices?.[0]?.delta
-    return { content: delta?.content || '', done: false, usage: parsed.usage || null, finishReason: mapFinishReason(parsed.choices?.[0]?.finish_reason) }
+    const choice = parsed.choices?.[0]
+    const delta = choice?.delta
+    if (delta && Array.isArray(delta.tool_calls) && delta.tool_calls.length) {
+      const tc = delta.tool_calls[0]
+      return {
+        content: delta.content || '',
+        done: false,
+        usage: parsed.usage || null,
+        finishReason: mapFinishReason(choice?.finish_reason),
+        toolCallDelta: {
+          index: tc.index ?? 0,
+          id: tc.id || undefined,
+          name: tc.function?.name || undefined,
+          argsTextDelta: tc.function?.arguments || ''
+        }
+      }
+    }
+    return { content: delta?.content || '', done: false, usage: parsed.usage || null, finishReason: mapFinishReason(choice?.finish_reason) }
   }
 
   getApiPath() { return '/v1/chat/completions' }
@@ -63,4 +97,9 @@ function mapFinishReason(reason) {
   const r = String(reason).toLowerCase()
   if (r === 'length' || r === 'max_tokens') return 'length'
   return r
+}
+
+function parseArgs(text) {
+  if (!text) return {}
+  try { return JSON.parse(text) } catch { return { __parseError: true, raw: text } }
 }
