@@ -17,6 +17,7 @@ export class DeepSeekProvider extends BaseProvider {
       max_tokens: options.maxTokens || 1000,
       stream: options.stream || false
     }
+    if (request.stream) request.stream_options = { include_usage: true }
     if (options.tools && this.capabilities.has('tools')) {
       request.tools = options.tools
       if (options.tool_choice) request.tool_choice = options.tool_choice
@@ -33,7 +34,7 @@ export class DeepSeekProvider extends BaseProvider {
     const msg = response.choices?.[0]?.message
     const result = {
       content: msg?.content || '',
-      usage: response.usage || null,
+      usage: normalizeDeepSeekUsage(response.usage),
       finishReason: mapFinishReason(response.choices?.[0]?.finish_reason)
     }
     if (msg?.reasoning_content) result.thinking = msg.reasoning_content
@@ -64,7 +65,7 @@ export class DeepSeekProvider extends BaseProvider {
         content: delta.content || '',
         thinking: delta.reasoning_content || '',
         done: false,
-        usage: parsed.usage || null,
+        usage: normalizeDeepSeekUsage(parsed.usage),
         finishReason: mapFinishReason(choice?.finish_reason),
         toolCallDelta: {
           index: tc.index ?? 0,
@@ -78,7 +79,7 @@ export class DeepSeekProvider extends BaseProvider {
       content: delta?.content || '',
       thinking: delta?.reasoning_content || '',
       done: false,
-      usage: parsed.usage || null,
+      usage: normalizeDeepSeekUsage(parsed.usage),
       finishReason: mapFinishReason(choice?.finish_reason)
     }
   }
@@ -101,6 +102,18 @@ function mapFinishReason(reason) {
 function parseArgs(text) {
   if (!text) return {}
   try { return JSON.parse(text) } catch { return { __parseError: true, raw: text } }
+}
+
+// DeepSeek: prompt_tokens = prompt_cache_hit_tokens + prompt_cache_miss_tokens
+// (cached tokens are already included in prompt_tokens, OpenAI-style).
+export function normalizeDeepSeekUsage(raw) {
+  if (!raw) return null
+  const inputTokens = raw.prompt_tokens ?? 0
+  const outputTokens = raw.completion_tokens ?? 0
+  const totalTokens = raw.total_tokens ?? (inputTokens + outputTokens)
+  const out = { inputTokens, outputTokens, totalTokens, raw }
+  if (raw.prompt_cache_hit_tokens != null) out.cachedInputTokens = raw.prompt_cache_hit_tokens
+  return out
 }
 
 // DeepSeek's thinking-mode models require the prior assistant `reasoning_content`

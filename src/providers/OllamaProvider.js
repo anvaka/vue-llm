@@ -61,7 +61,7 @@ export class OllamaProvider extends BaseProvider {
   processResponse(response) {
     const result = {
       content: response.message?.content || '',
-      usage: response.eval_count ? { tokens: response.eval_count } : null,
+      usage: normalizeOllamaUsage(response),
       finishReason: mapFinishReason(response.finish_reason)
     }
     if (response.thinking) result.thinking = response.thinking
@@ -85,7 +85,7 @@ export class OllamaProvider extends BaseProvider {
       content: parsed.message?.content || '',
       thinking: parsed.thinking || parsed.message?.thinking || '',
       done: parsed.done || false,
-      usage: parsed.eval_count ? { tokens: parsed.eval_count } : null,
+      usage: normalizeOllamaUsage(parsed),
       finishReason: mapFinishReason(parsed.finish_reason)
     }
     const calls = parsed.message?.tool_calls
@@ -118,6 +118,18 @@ function mapFinishReason(reason) {
 }
 
 function synthId(i) { return `ollama_call_${i}` }
+
+// Ollama returns prompt_eval_count / eval_count at the top level of the
+// response (and in the final streaming chunk). Cache concepts don't apply
+// for local inference. Skip if neither field is present so intermediate
+// streaming chunks don't emit empty usage.
+export function normalizeOllamaUsage(raw) {
+  if (!raw) return null
+  if (raw.prompt_eval_count == null && raw.eval_count == null) return null
+  const inputTokens = raw.prompt_eval_count ?? 0
+  const outputTokens = raw.eval_count ?? 0
+  return { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, raw }
+}
 
 function normalizeArgs(args) {
   if (args == null) return {}

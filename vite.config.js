@@ -9,7 +9,8 @@ export default defineConfig({
       entry: {
         index: resolve(__dirname, 'src/index.js'),
         'vue/index': resolve(__dirname, 'src/vue/index.js'),
-        'providers/index': resolve(__dirname, 'src/providers/index.js')
+        'providers/index': resolve(__dirname, 'src/providers/index.js'),
+        'pricing/index': resolve(__dirname, 'src/pricing/index.js')
       },
       formats: ['es']
     },

@@ -1,12 +1,29 @@
 import { createProviderFlexible } from '../providers/factory.js'
+import { calculateCost } from '../pricing/calculate.js'
 
 export class LLMClient {
-  constructor({ configStore, logger } = {}) {
+  constructor({ configStore, logger, pricing } = {}) {
     this.configStore = configStore
     this.logger = logger || console
     this.config = null
     this.provider = null
     this.usageTracker = null
+    // Optional per-instance pricing override map. Shape:
+    //   { providerType: { modelId: { input, output, cachedInput?, cacheCreation? } } }
+    // Takes priority over registerPricing() globals and the built-in table.
+    this.pricing = pricing || null
+  }
+
+  // Compute USD cost for a usage object using this client's active provider /
+  // model + any per-instance overrides. Returns null when rates are unknown.
+  // Exposed so consumers can re-cost historical usage objects without
+  // reaching into the pricing module directly.
+  costFor(usage, { provider, model } = {}) {
+    return calculateCost(usage, {
+      provider: provider || this.config?.provider,
+      model: model || this.config?.model,
+      pricing: this.pricing
+    })
   }
 
   async initialize(tempConfig = null) {
@@ -56,21 +73,17 @@ export class LLMClient {
   }
 
   _createUsageTracker() {
-    return {
+    const tracker = {
       totalTokens: 0,
       totalCost: 0,
-      recordUsage: (request, response) => {
-        if (response.usage?.tokens) {
-          this.totalTokens += response.usage.tokens
-        }
-        // Cost calculation can be added later
+      recordUsage: (_request, response) => {
+        if (response?.usage?.totalTokens != null) tracker.totalTokens += response.usage.totalTokens
       },
       recordPartialUsage: (usage) => {
-        if (usage?.tokens) {
-          this.totalTokens += usage.tokens
-        }
+        if (usage?.totalTokens != null) tracker.totalTokens += usage.totalTokens
       }
     }
+    return tracker
   }
 
   validateCapabilities(options) {
@@ -109,11 +122,19 @@ export class LLMClient {
     const validated = this.validateCapabilities({ ...payload, stream: true, model: payload.model || this.config.model, requestId: this.generateRequestId() })
     const messages = payload.messages
     let fullContent = ''
+    let lastUsage = null
     await this.provider.streamRequest(messages, validated, (chunk) => {
       fullContent = chunk.fullContent
-      onChunk && onChunk(chunk)
+      if (chunk.fullUsage) lastUsage = chunk.fullUsage
+      // Annotate each chunk with running cost when rates are known. Consumers
+      // can ignore it (cost is null when no rates table entry matches) or
+      // display a live $ counter.
+      const enriched = chunk.fullUsage
+        ? { ...chunk, cost: this.costFor(chunk.fullUsage, { provider: this.config.provider, model: validated.model }) }
+        : chunk
+      onChunk && onChunk(enriched)
     })
-    return fullContent
+    return { content: fullContent, usage: lastUsage, cost: this.costFor(lastUsage, { provider: this.config.provider, model: validated.model }) }
   }
 
   // Multi-turn tool-calling loop. Each iteration:
@@ -149,6 +170,11 @@ export class LLMClient {
     const conversation = messages.slice()
     let iter = 0
     let stopReason = null
+    // Aggregate usage across all iterations of the agent loop — a single
+    // user prompt can incur many model calls (each tool round-trip is one).
+    // Consumers usually want the total cost of the whole task, not per-iter.
+    const totalUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, cacheCreationInputTokens: 0, reasoningTokens: 0 }
+    let usageSeen = false
     while (iter < maxIters) {
       iter++
       onEvent && onEvent({ type: 'iter-start', iter })
@@ -169,6 +195,14 @@ export class LLMClient {
       const textContent = result?.content || ''
       const toolCalls = result?.toolCalls || []
       const thinking = result?.thinking || ''
+      const iterUsage = result?.usage || null
+      if (iterUsage) {
+        usageSeen = true
+        for (const k of Object.keys(totalUsage)) {
+          if (iterUsage[k] != null) totalUsage[k] += iterUsage[k]
+        }
+        onEvent && onEvent({ type: 'usage', usage: iterUsage, cost: this.costFor(iterUsage, { provider: this.config.provider, model: validated.model }) })
+      }
 
       const assistantMsg = { role: 'assistant', content: textContent }
       if (toolCalls.length) assistantMsg.tool_calls = toolCalls
@@ -203,8 +237,10 @@ export class LLMClient {
       }
     }
     if (!stopReason) stopReason = 'max-iters'
-    onEvent && onEvent({ type: 'stop', reason: stopReason, iterations: iter })
-    return { messages: conversation, iterations: iter, stopReason }
+    const finalUsage = usageSeen ? totalUsage : null
+    const finalCost = this.costFor(finalUsage, { provider: this.config.provider, model: model || this.config.model })
+    onEvent && onEvent({ type: 'stop', reason: stopReason, iterations: iter, usage: finalUsage, cost: finalCost })
+    return { messages: conversation, iterations: iter, stopReason, usage: finalUsage, cost: finalCost }
   }
 
   generateRequestId() {
@@ -387,7 +423,7 @@ class StreamablePromise {
     targetNode._activeRequestId = opts.requestId
     let fullContent = ''
     let finishReason = null
-    let totalTokens = 0
+    let finalUsage = null
 
     try {
       await provider.streamRequest(messages, opts, chunk => {
@@ -395,14 +431,15 @@ class StreamablePromise {
           fullContent = chunk.fullContent
           targetNode.setText?.(fullContent)
         }
-        if (chunk.usage?.tokens) totalTokens += chunk.usage.tokens
+        if (chunk.fullUsage) finalUsage = chunk.fullUsage
         if (chunk.finishReason) finishReason = chunk.finishReason
         if (chunk.done) {
           targetNode.setStreamingState?.(false)
           targetNode._activeRequestId = null
         }
       })
-      targetNode.addLLMLog?.((this.operationName || 'streaming-request') + '-response', { requestId: opts.requestId }, { content: fullContent, usage: { tokens: totalTokens } })
+      const finalCost = this.client.costFor?.(finalUsage, { provider: config?.provider, model: opts.model })
+      targetNode.addLLMLog?.((this.operationName || 'streaming-request') + '-response', { requestId: opts.requestId }, { content: fullContent, usage: finalUsage, cost: finalCost })
       if (finishReason === 'length') {
         targetNode.setAttribute?.('_truncated', true)
         targetNode.addLog?.('Response truncated. Increase Max Tokens.', 'warn', { finish_reason: 'length' })

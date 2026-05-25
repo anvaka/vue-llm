@@ -17,6 +17,7 @@
 
 import { LLMClient } from '../src/core/LLMClient.js'
 import { createProvider, DEFAULT_CONFIGS, PROVIDERS } from '../src/providers/factory.js'
+import { formatCost } from '../src/pricing/index.js'
 
 // Per provider: a `fast` (cheap baseline) and a `pro` (heavyweight, often
 // reasoning-enabled) model. Pro hints are tried with enableThinking=true so we
@@ -204,13 +205,16 @@ async function runOne(spec, scenario) {
 
   console.log(`  [${tag}]   final: ${finalText.slice(0, 160)}${finalText.length > 160 ? '…' : ''}`)
 
+  const usage = result.usage || null
+  const cost = result.cost || null
+
   if (!calledMultiply) {
-    return { id: spec.id, scenario: scenario.name, status: 'fail', model, error: 'model never called multiply', stopReason: result.stopReason, durationMs }
+    return { id: spec.id, scenario: scenario.name, status: 'fail', model, error: 'model never called multiply', stopReason: result.stopReason, durationMs, usage, cost }
   }
   if (!has77) {
-    return { id: spec.id, scenario: scenario.name, status: 'fail', model, error: 'final answer missing "77"', finalText, durationMs }
+    return { id: spec.id, scenario: scenario.name, status: 'fail', model, error: 'final answer missing "77"', finalText, durationMs, usage, cost }
   }
-  return { id: spec.id, scenario: scenario.name, status: 'pass', model, iterations: result.iterations, stopReason: result.stopReason, durationMs, sawThinking }
+  return { id: spec.id, scenario: scenario.name, status: 'pass', model, iterations: result.iterations, stopReason: result.stopReason, durationMs, sawThinking, usage, cost }
 }
 
 async function main() {
@@ -237,7 +241,9 @@ async function main() {
         results.push(r)
         if (r.status === 'pass') {
           const tFlag = r.sawThinking ? ' +thinking' : ''
-          console.log(`  [${tag}] PASS (${r.durationMs}ms, iters=${r.iterations}${tFlag})`)
+          const usageStr = r.usage ? ` ${r.usage.inputTokens ?? 0}→${r.usage.outputTokens ?? 0} tok` : ''
+          const costStr = r.cost ? ` ${formatCost(r.cost.total)}` : ''
+          console.log(`  [${tag}] PASS (${r.durationMs}ms, iters=${r.iterations}${tFlag}${usageStr}${costStr})`)
         } else if (r.status === 'skip') console.log(`  [${tag}] SKIP (${r.reason})`)
         else console.log(`  [${tag}] FAIL — ${r.error}`)
       } catch (e) {
@@ -252,7 +258,8 @@ async function main() {
   for (const r of results) {
     const status = r.status === 'pass' ? 'PASS' : r.status === 'skip' ? 'SKIP' : 'FAIL'
     const tFlag = r.sawThinking ? ' +think' : ''
-    const detail = r.status === 'pass' ? `${r.model} (${r.durationMs}ms, iters=${r.iterations}${tFlag})`
+    const costStr = r.cost ? ` ${formatCost(r.cost.total).padStart(10)}` : (r.usage ? '   (no rates)' : '')
+    const detail = r.status === 'pass' ? `${r.model} (${r.durationMs}ms, iters=${r.iterations}${tFlag})${costStr}`
                  : r.status === 'skip' ? r.reason
                  : `${r.model || '?'} — ${r.error}`
     console.log(`  ${r.id.padEnd(11)} ${r.scenario.padEnd(5)} ${status}  ${detail}`)
@@ -260,7 +267,14 @@ async function main() {
   const failed = results.filter(r => r.status === 'fail')
   const passed = results.filter(r => r.status === 'pass')
   const skipped = results.filter(r => r.status === 'skip')
+  // Sum cost across all priced runs so we know what a full pass actually
+  // burns. Missing rates ('no rates' below) are excluded — the printed total
+  // is a lower bound when any model lacks a price entry.
+  const totalCost = results.reduce((acc, r) => acc + (r.cost?.total || 0), 0)
+  const pricedCount = results.filter(r => r.cost).length
+  const unpricedCount = results.filter(r => r.usage && !r.cost).length
   console.log(`\n${passed.length} passed, ${failed.length} failed, ${skipped.length} skipped`)
+  console.log(`total cost: ${formatCost(totalCost)} (${pricedCount} priced, ${unpricedCount} unpriced)`)
   process.exit(failed.length ? 1 : 0)
 }
 

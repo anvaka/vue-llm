@@ -7,6 +7,12 @@ export { LocalStorageAdapter, MemoryStorageAdapter } from './core/storageAdapter
 // Provider exports
 export { PROVIDERS, DEFAULT_CONFIGS, createProvider, registerProvider, createProviderFlexible } from './providers/factory.js'
 
+// Pricing exports — `calculateCost(usage, {provider, model})` for a single
+// call, `registerPricing(provider, model, rates)` to override the built-in
+// table globally, and `DEFAULT_RATES` for inspection. Cost objects come back
+// from LLMClient.stream / .runAgentLoop attached to the result.
+export { DEFAULT_RATES, calculateCost, formatCost, lookupRates, registerPricing, clearPricingOverrides } from './pricing/index.js'
+
 // Vue plugin and composables
 export { LLMPlugin, createLLM, LLM_CLIENT_SYMBOL, LLM_CONFIG_SYMBOL, LLM_KEYSTORE_SYMBOL } from './vue/plugin.js'
 export { useLLM, createDefaultConfig } from './vue/useLLM.js'

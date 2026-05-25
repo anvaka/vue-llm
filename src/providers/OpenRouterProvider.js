@@ -1,5 +1,5 @@
 import { BaseProvider } from './BaseProvider.js'
-import { convertMessagesToOpenAI } from './OpenAIProvider.js'
+import { convertMessagesToOpenAI, normalizeOpenAIUsage } from './OpenAIProvider.js'
 
 export class OpenRouterProvider extends BaseProvider {
   async detectCapabilities() {
@@ -16,6 +16,7 @@ export class OpenRouterProvider extends BaseProvider {
       max_tokens: options.maxTokens || 1000,
       stream: options.stream || false
     }
+    if (request.stream) request.stream_options = { include_usage: true }
     if (options.enableThinking && this.capabilities.has('thinking')) {
       request.reasoning = options.reasoning !== false
       if (options.reasoningEffort) request.reasoning_effort = options.reasoningEffort
@@ -47,7 +48,7 @@ export class OpenRouterProvider extends BaseProvider {
   }
   processResponse(response) {
     const msg = response.choices?.[0]?.message
-    const result = { content: msg?.content || '', usage: response.usage || null, finishReason: mapFinishReason(response.choices?.[0]?.finish_reason) }
+    const result = { content: msg?.content || '', usage: normalizeOpenAIUsage(response.usage), finishReason: mapFinishReason(response.choices?.[0]?.finish_reason) }
     if (msg?.reasoning) result.thinking = msg.reasoning
     if (Array.isArray(msg?.tool_calls)) {
       result.toolCalls = msg.tool_calls.map(tc => ({
@@ -74,7 +75,7 @@ export class OpenRouterProvider extends BaseProvider {
         content: delta.content || '',
         thinking: delta.reasoning || '',
         done: false,
-        usage: parsed.usage || null,
+        usage: normalizeOpenAIUsage(parsed.usage),
         finishReason: mapFinishReason(choice?.finish_reason),
         toolCallDelta: {
           index: tc.index ?? 0,
@@ -84,7 +85,7 @@ export class OpenRouterProvider extends BaseProvider {
         }
       }
     }
-    return { content: delta?.content || '', thinking: delta?.reasoning || '', done: false, usage: parsed.usage || null, finishReason: mapFinishReason(choice?.finish_reason) }
+    return { content: delta?.content || '', thinking: delta?.reasoning || '', done: false, usage: normalizeOpenAIUsage(parsed.usage), finishReason: mapFinishReason(choice?.finish_reason) }
   }
   getApiPath() { return '/v1/chat/completions' }
   requiresAuth() { return !!this.config.apiKey }

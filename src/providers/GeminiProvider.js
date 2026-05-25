@@ -146,13 +146,7 @@ export class GeminiProvider extends BaseProvider {
       }
       if (candidate.finishReason) result.finishReason = mapFinishReason(candidate.finishReason)
     }
-    if (response.usageMetadata) {
-      result.usage = {
-        promptTokens: response.usageMetadata.promptTokenCount,
-        completionTokens: response.usageMetadata.candidatesTokenCount,
-        totalTokens: response.usageMetadata.totalTokenCount
-      }
-    }
+    result.usage = normalizeGeminiUsage(response.usageMetadata)
     return result
   }
 
@@ -184,11 +178,7 @@ export class GeminiProvider extends BaseProvider {
       content,
       thinking,
       done,
-      usage: parsed.usageMetadata ? {
-        promptTokens: parsed.usageMetadata.promptTokenCount,
-        completionTokens: parsed.usageMetadata.candidatesTokenCount,
-        totalTokens: parsed.usageMetadata.totalTokenCount
-      } : null,
+      usage: normalizeGeminiUsage(parsed.usageMetadata),
       finishReason
     }
     if (fnCalls.length) {
@@ -224,6 +214,20 @@ function mapFinishReason(reason) {
 }
 
 function synthId(i) { return `gemini_call_${i}` }
+
+// Gemini's usageMetadata: promptTokenCount is the full prompt (cachedContent
+// is a subset), candidatesTokenCount includes thoughtsTokenCount on the
+// Gemini API (Vertex behaves differently — we target Gemini API here).
+export function normalizeGeminiUsage(raw) {
+  if (!raw) return null
+  const inputTokens = raw.promptTokenCount ?? 0
+  const outputTokens = raw.candidatesTokenCount ?? 0
+  const totalTokens = raw.totalTokenCount ?? (inputTokens + outputTokens)
+  const out = { inputTokens, outputTokens, totalTokens, raw }
+  if (raw.cachedContentTokenCount != null) out.cachedInputTokens = raw.cachedContentTokenCount
+  if (raw.thoughtsTokenCount != null) out.reasoningTokens = raw.thoughtsTokenCount
+  return out
+}
 
 function safeParse(text) {
   try { return JSON.parse(text) } catch { return {} }

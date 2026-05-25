@@ -24,6 +24,9 @@ export class OpenAIProvider extends BaseProvider {
       temperature: options.temperature ?? 0.7,
       stream: options.stream || false
     }
+    // OpenAI omits the usage block from streamed responses unless this flag
+    // is set, so cost reporting silently breaks on .stream() without it.
+    if (request.stream) request.stream_options = { include_usage: true }
 
     if (this.#requiresMaxCompletionTokens(model)) {
       request.max_completion_tokens = options.maxTokens || 1000
@@ -79,7 +82,7 @@ export class OpenAIProvider extends BaseProvider {
     const msg = response.choices?.[0]?.message
     const result = {
       content: msg?.content || '',
-      usage: response.usage || null,
+      usage: normalizeOpenAIUsage(response.usage),
       finishReason: response.choices?.[0]?.finish_reason || null
     }
     if (response.reasoning) {
@@ -117,7 +120,7 @@ export class OpenAIProvider extends BaseProvider {
         content: delta.content || '',
         thinking: delta.reasoning || '',
         done: false,
-        usage: parsed.usage || null,
+        usage: normalizeOpenAIUsage(parsed.usage),
         finishReason: choice?.finish_reason || null,
         toolCallDelta: {
           index: tc.index ?? 0,
@@ -131,7 +134,7 @@ export class OpenAIProvider extends BaseProvider {
       content: delta?.content || '',
       thinking: delta?.reasoning || '',
       done: false,
-      usage: parsed.usage || null,
+      usage: normalizeOpenAIUsage(parsed.usage),
       finishReason: choice?.finish_reason || null
     }
   }
@@ -150,6 +153,23 @@ export class OpenAIProvider extends BaseProvider {
 function parseArgs(text) {
   if (!text) return {}
   try { return JSON.parse(text) } catch { return { __parseError: true, raw: text } }
+}
+
+// OpenAI's usage object: prompt_tokens (includes cached), completion_tokens
+// (includes reasoning), total_tokens, plus the breakdown sub-objects
+// prompt_tokens_details.cached_tokens and completion_tokens_details.reasoning_tokens.
+// Map to the library's canonical shape.
+export function normalizeOpenAIUsage(raw) {
+  if (!raw) return null
+  const inputTokens = raw.prompt_tokens ?? 0
+  const outputTokens = raw.completion_tokens ?? 0
+  const totalTokens = raw.total_tokens ?? (inputTokens + outputTokens)
+  const cached = raw.prompt_tokens_details?.cached_tokens
+  const reasoning = raw.completion_tokens_details?.reasoning_tokens
+  const out = { inputTokens, outputTokens, totalTokens, raw }
+  if (cached != null) out.cachedInputTokens = cached
+  if (reasoning != null) out.reasoningTokens = reasoning
+  return out
 }
 
 // Canonical in-memory messages use { tool_calls: [{id, name, args}] } on the

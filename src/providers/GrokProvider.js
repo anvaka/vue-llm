@@ -1,5 +1,5 @@
 import { BaseProvider } from './BaseProvider.js'
-import { convertMessagesToOpenAI } from './OpenAIProvider.js'
+import { convertMessagesToOpenAI, normalizeOpenAIUsage } from './OpenAIProvider.js'
 
 export class GrokProvider extends BaseProvider {
   async detectCapabilities() {
@@ -17,6 +17,7 @@ export class GrokProvider extends BaseProvider {
       max_tokens: options.maxTokens || 1000,
       stream: options.stream || false
     }
+    if (request.stream) request.stream_options = { include_usage: true }
     if (options.tools && this.capabilities.has('tools')) {
       request.tools = options.tools
       if (options.tool_choice) request.tool_choice = options.tool_choice
@@ -44,7 +45,7 @@ export class GrokProvider extends BaseProvider {
     const msg = response.choices?.[0]?.message
     const result = {
       content: msg?.content || '',
-      usage: response.usage || null,
+      usage: normalizeOpenAIUsage(response.usage),
       finishReason: mapFinishReason(response.choices?.[0]?.finish_reason)
     }
     if (Array.isArray(msg?.tool_calls)) {
@@ -73,7 +74,7 @@ export class GrokProvider extends BaseProvider {
       return {
         content: delta.content || '',
         done: false,
-        usage: parsed.usage || null,
+        usage: normalizeOpenAIUsage(parsed.usage),
         finishReason: mapFinishReason(choice?.finish_reason),
         toolCallDelta: {
           index: tc.index ?? 0,
@@ -83,7 +84,7 @@ export class GrokProvider extends BaseProvider {
         }
       }
     }
-    return { content: delta?.content || '', done: false, usage: parsed.usage || null, finishReason: mapFinishReason(choice?.finish_reason) }
+    return { content: delta?.content || '', done: false, usage: normalizeOpenAIUsage(parsed.usage), finishReason: mapFinishReason(choice?.finish_reason) }
   }
 
   getApiPath() { return '/v1/chat/completions' }

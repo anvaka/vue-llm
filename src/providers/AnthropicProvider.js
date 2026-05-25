@@ -65,7 +65,7 @@ export class AnthropicProvider extends BaseProvider {
     const toolCalls = toolUses.map(b => ({ id: b.id, name: b.name, args: b.input || {} }))
     return {
       content: textBlock?.text || '',
-      usage: response.usage || null,
+      usage: normalizeAnthropicUsage(response.usage),
       finishReason,
       toolCalls
     }
@@ -86,6 +86,12 @@ export class AnthropicProvider extends BaseProvider {
       e.code = code
       if (parsed.request_id) e.requestId = parsed.request_id
       throw e
+    }
+    if (parsed.type === 'message_start') {
+      // Anthropic reports input + cache tokens once at message_start; output
+      // tokens are streamed via message_delta. Forward usage so BaseProvider's
+      // fullUsage accumulator can merge them.
+      return { content: '', thinking: '', done: false, usage: normalizeAnthropicUsage(parsed.message?.usage), finishReason: null }
     }
     if (parsed.type === 'content_block_start') {
       const cb = parsed.content_block
@@ -112,7 +118,7 @@ export class AnthropicProvider extends BaseProvider {
       return null
     }
     if (parsed.type === 'message_delta') {
-      return { content: '', thinking: '', done: false, usage: parsed.usage ? { tokens: parsed.usage.output_tokens || 0 } : null, finishReason: mapFinishReason(parsed.delta?.stop_reason) }
+      return { content: '', thinking: '', done: false, usage: normalizeAnthropicUsage(parsed.usage), finishReason: mapFinishReason(parsed.delta?.stop_reason) }
     }
     if (parsed.type === 'message_stop') {
       return { content: '', thinking: '', done: true, usage: null, finishReason: mapFinishReason(parsed.stop_reason) }
@@ -134,6 +140,24 @@ function mapFinishReason(reason) {
   const r = String(reason).toLowerCase()
   if (r === 'max_tokens') return 'length'
   return r
+}
+
+// Anthropic's `input_tokens` is uncached-only — cache hits/writes are reported
+// separately. The canonical `inputTokens` represents the full prompt count, so
+// we add cache tokens back in. message_start carries input + cache; message_delta
+// only refreshes output_tokens (and may omit input fields entirely).
+export function normalizeAnthropicUsage(raw) {
+  if (!raw) return null
+  const uncached = raw.input_tokens ?? 0
+  const cacheRead = raw.cache_read_input_tokens ?? 0
+  const cacheCreate = raw.cache_creation_input_tokens ?? 0
+  const hasInputFields = raw.input_tokens != null || raw.cache_read_input_tokens != null || raw.cache_creation_input_tokens != null
+  const inputTokens = hasInputFields ? uncached + cacheRead + cacheCreate : 0
+  const outputTokens = raw.output_tokens ?? 0
+  const out = { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, raw }
+  if (raw.cache_read_input_tokens != null) out.cachedInputTokens = cacheRead
+  if (raw.cache_creation_input_tokens != null) out.cacheCreationInputTokens = cacheCreate
+  return out
 }
 
 // Canonical in-memory message shape (OpenAI-flavored):

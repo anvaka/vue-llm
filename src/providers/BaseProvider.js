@@ -38,6 +38,7 @@ export class BaseProvider {
       const decoder = new TextDecoder()
       let fullContent = ''
       let fullThinking = ''
+      let fullUsage = null
       let buffer = ''
       // Per-call accumulator for tool calls, keyed by index (both Anthropic
       // and OpenAI/OpenRouter index content blocks by position). Providers
@@ -68,6 +69,7 @@ export class BaseProvider {
         if (!result) return null
         if (result.content) fullContent += result.content
         if (result.thinking) fullThinking += result.thinking
+        if (result.usage) fullUsage = mergeUsage(fullUsage, result.usage)
         // Providers can return a single `toolCallDelta` (OpenAI-style streaming
         // chunks) or a batch `toolCallDeltas` array (Ollama delivers all
         // tool_calls in one final chunk).
@@ -94,6 +96,7 @@ export class BaseProvider {
           fullThinking,
           done: isDone,
           usage: result.usage || null,
+          fullUsage,
           finishReason: result.finishReason || null,
           toolCallDelta: result.toolCallDelta || null,
           toolCalls: fullToolCalls
@@ -117,12 +120,12 @@ export class BaseProvider {
           const line = buffer.slice(0, newlineIdx)
           buffer = buffer.slice(newlineIdx + 1)
           if (handleLine(line) === 'done') {
-            return { content: fullContent, thinking: fullThinking, toolCalls: finalizeToolCalls() }
+            return { content: fullContent, thinking: fullThinking, toolCalls: finalizeToolCalls(), usage: fullUsage }
           }
         }
       }
 
-      return { content: fullContent, thinking: fullThinking, toolCalls: finalizeToolCalls() }
+      return { content: fullContent, thinking: fullThinking, toolCalls: finalizeToolCalls(), usage: fullUsage }
     } catch (error) {
       if (error.name === 'AbortError') {
         throw new Error('Request cancelled')
@@ -291,4 +294,28 @@ export class BaseProvider {
   parseModelsResponse(_data) {
     throw new Error('parseModelsResponse must be implemented by subclass')
   }
+}
+
+// Merge a usage update into the running accumulator. Each field updates
+// independently — providers stream different fields in different chunks
+// (Anthropic emits input/cache at message_start and refreshes output_tokens
+// per message_delta; OpenAI usually delivers a single usage block at stream
+// end). We take max() across updates so a late chunk that omits a previously-
+// reported field can't reset it to zero, but a higher running count wins.
+function mergeUsage(prev, next) {
+  if (!next) return prev
+  if (!prev) return { ...next }
+  const merged = { ...prev }
+  const fields = ['inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens', 'cacheCreationInputTokens', 'reasoningTokens']
+  for (const f of fields) {
+    if (next[f] != null) {
+      merged[f] = prev[f] != null ? Math.max(prev[f], next[f]) : next[f]
+    }
+  }
+  if (next.raw) merged.raw = next.raw
+  // Recompute totalTokens if the provider didn't supply one but we have both halves.
+  if (merged.totalTokens == null && merged.inputTokens != null && merged.outputTokens != null) {
+    merged.totalTokens = merged.inputTokens + merged.outputTokens
+  }
+  return merged
 }
