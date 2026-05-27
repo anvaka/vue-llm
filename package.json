@@ -1,6 +1,6 @@
 {
   "name": "@anvaka/vue-llm",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Browser-only LLM client with provider adapters and Vue 3 components",
   "type": "module",
   "license": "MIT",
