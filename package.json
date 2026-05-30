@@ -9,7 +9,8 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite build --watch",
-    "test:providers": "node test/providers.mjs"
+    "test:providers": "node test/providers.mjs",
+    "test:caching": "node test/caching.mjs"
   },
   "exports": {
     ".": {

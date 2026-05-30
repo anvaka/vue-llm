@@ -7,6 +7,7 @@ Browser-only LLM client + Vue 3 plugin, provider adapters, and lightweight compo
 - LocalStorage-based config store (custom storage adapter supported)
 - Streaming + promise requests via `llmClient.stream()`
 - Normalized usage + USD cost on every response (override built-in rates per app or per model)
+- Automatic prompt caching for Claude (Anthropic + Bedrock) — caches the system+tools prefix, plus the rolling conversation in agent loops; opt out with `promptCache: false`
 - Vue plugin for dependency injection
 - `useLLM()` composable with reactive streaming state
 - Ready-to-use components: `ProviderSelector`, `LLMConfigModal`, `StoredKeysManager`
@@ -155,6 +156,22 @@ const { messages, usage, cost } = await client.runAgentLoop({
     if (ev.type === 'usage') console.log(`iter cost: ${ev.cost?.total}`)
   }
 })
+```
+
+### Prompt caching (Claude)
+
+Anthropic and Bedrock requests are sent with `cache_control` markers by default, so repeated prefixes are read from cache instead of re-billed at full input price. Two prefixes are tagged:
+
+- **System + tools** — on every Claude request. The static prefix recurs identically across calls and runs within the cache TTL (~5 min).
+- **Rolling conversation** — added by `runAgentLoop` only, since it re-sends the whole growing transcript each turn. Iteration *N* reads iterations `1..N-1` from cache and only writes the new turn.
+
+Cache hits and writes surface in the usual `usage` fields (`cachedInputTokens`, `cacheCreationInputTokens`) and are priced via the `cachedInput` / `cacheCreation` rate keys. No setup is required — prefixes under the model's minimum cacheable length simply aren't cached (no error).
+
+Disable it per call or per provider config:
+
+```js
+client.stream({ messages: [...], promptCache: false })   // single request
+configStore.saveConfig('claude', { ...cfg, promptCache: false }) // all requests for this provider
 ```
 
 ### Overriding rates

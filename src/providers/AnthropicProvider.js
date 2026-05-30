@@ -32,7 +32,17 @@ export class AnthropicProvider extends BaseProvider {
       request.tools = convertToolsToAnthropic(options.tools)
       if (options.tool_choice) request.tool_choice = options.tool_choice
     }
+    if (this.promptCachingEnabled(options)) applyPromptCaching(request, options)
     return request
+  }
+
+  // Prompt caching is on by default for the Claude/Anthropic-family path
+  // (Bedrock inherits this method) because it's strictly cheaper and degrades
+  // gracefully — a prefix under the model's minimum cacheable length is simply
+  // not cached, with no error. Disable per-call with options.promptCache:false
+  // or per-config with config.promptCache:false.
+  promptCachingEnabled(options) {
+    return options?.promptCache !== false && this.config?.promptCache !== false
   }
 
   processMessages(messages, options) {
@@ -212,4 +222,73 @@ function convertToolsToAnthropic(tools) {
     }
     return t
   })
+}
+
+const EPHEMERAL_CACHE = { type: 'ephemeral' }
+
+// Tag the largest STABLE prefixes of an Anthropic request so repeated calls
+// (every iteration of a tool-use agent loop, and subsequent runs within the
+// ~5-minute TTL) read them from cache instead of re-billing full input price.
+// Anthropic's cache prefix order is tools → system → messages, so:
+//   1. A breakpoint at the end of `system` caches [tools + system] together.
+//      When there's no system message, fall back to the last tool definition.
+//      This is applied to EVERY Claude request — the prefix recurs identically.
+//   2. A rolling breakpoint on the last block of the final message caches the
+//      growing transcript: each request caches its whole conversation, and the
+//      next iteration reads that back as a prefix (incremental conversation
+//      caching). This only pays off when the conversation is re-sent across
+//      turns, so it's gated behind options.cacheTranscript (set by the agent
+//      loop). A single completion would just eat the 1.25x write premium.
+// We spend at most 2 of the 4 available breakpoints. Mutates `request` (its
+// system/messages/tools are freshly built by the converters above, so the
+// caller's original messages are never touched).
+function applyPromptCaching(request, options) {
+  if (request.system) {
+    request.system = systemToCachedBlocks(request.system)
+  } else if (Array.isArray(request.tools) && request.tools.length) {
+    const last = request.tools.length - 1
+    request.tools[last] = { ...request.tools[last], cache_control: EPHEMERAL_CACHE }
+  }
+  if (options?.cacheTranscript) {
+    const msgs = request.messages
+    if (Array.isArray(msgs) && msgs.length) {
+      const last = msgs[msgs.length - 1]
+      last.content = tagLastBlock(last.content)
+    }
+  }
+  return request
+}
+
+// `system` may be a plain string or an array of content blocks; cache_control
+// can only ride on a block, so normalize to blocks and tag the last one.
+function systemToCachedBlocks(system) {
+  let blocks
+  if (typeof system === 'string') {
+    blocks = [{ type: 'text', text: system }]
+  } else if (Array.isArray(system) && system.length) {
+    blocks = system.map(b => (typeof b === 'string' ? { type: 'text', text: b } : { ...b }))
+  } else {
+    return system
+  }
+  blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], cache_control: EPHEMERAL_CACHE }
+  return blocks
+}
+
+// Attach cache_control to the final content block of a message. Message content
+// can be a string (wrap it) or an array of blocks (text / tool_use /
+// tool_result — all accept cache_control).
+function tagLastBlock(content) {
+  if (typeof content === 'string') {
+    return [{ type: 'text', text: content, cache_control: EPHEMERAL_CACHE }]
+  }
+  if (Array.isArray(content) && content.length) {
+    const copy = content.slice()
+    const lastIdx = copy.length - 1
+    const block = copy[lastIdx]
+    copy[lastIdx] = typeof block === 'string'
+      ? { type: 'text', text: block, cache_control: EPHEMERAL_CACHE }
+      : { ...block, cache_control: EPHEMERAL_CACHE }
+    return copy
+  }
+  return content
 }

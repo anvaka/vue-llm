@@ -186,6 +186,9 @@ export class LLMClient {
         temperature: temperature ?? this.config.temperature,
         maxTokens: maxTokens ?? this.config.maxTokens ?? 4096,
         enableThinking: enableThinking ?? false,
+        // Re-sends the whole growing conversation each turn, so cache the
+        // rolling transcript prefix (Anthropic-family providers honor this).
+        cacheTranscript: true,
         requestId: this.generateRequestId()
       })
       const result = await this.provider.streamRequest(conversation, validated, (chunk) => {
