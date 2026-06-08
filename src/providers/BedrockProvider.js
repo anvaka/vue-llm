@@ -1,11 +1,14 @@
 import { BaseProvider } from './BaseProvider.js'
 import { AnthropicProvider } from './AnthropicProvider.js'
 
-// Hardcoded list of Anthropic Claude inference profiles on Bedrock.
-// Control-plane discovery requires SigV4, which Bearer auth doesn't satisfy,
-// so we ship a static list. Users can paste any inference-profile id in the
-// model field — the dropdown is just convenience.
+// Static list of Anthropic Claude inference profiles on Bedrock, used as the
+// default dropdown and as the offline fallback for discovery. Live discovery
+// against the control plane IS possible with a Bedrock API key (see
+// discoverModels below) but is opt-in; this list keeps the dropdown populated
+// without a network call. Users can also paste any inference-profile id into
+// the model field directly.
 export const BEDROCK_CLAUDE_MODELS = [
+  'us.anthropic.claude-opus-4-8',
   'us.anthropic.claude-opus-4-7',
   'us.anthropic.claude-sonnet-4-6',
   'us.anthropic.claude-haiku-4-5-20251001-v1:0',
@@ -118,14 +121,47 @@ export class BedrockProvider extends AnthropicProvider {
     return new Response(sseBody, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
   }
 
-  // Bedrock control plane needs SigV4; Bearer auth can't list models.
-  // Return the hardcoded list so the dropdown still populates.
-  async discoverModels() {
-    return BEDROCK_CLAUDE_MODELS.slice()
+  // Live discovery is opt-in via config.liveModelDiscovery. A Bedrock API key
+  // authenticates against the control plane with Bearer auth (no SigV4), and
+  // the control-plane host returns permissive CORS headers, so a browser fetch
+  // works. When disabled (default) or on any failure, fall back to the static
+  // list — existing apps keep working with zero surprise network calls.
+  async discoverModels(timeoutMs = 10000) {
+    if (!this.config.liveModelDiscovery || !this.getModelsEndpoint()) {
+      return BEDROCK_CLAUDE_MODELS.slice()
+    }
+    try {
+      const models = await super.discoverModels(timeoutMs)
+      return models.length ? models : BEDROCK_CLAUDE_MODELS.slice()
+    } catch {
+      return BEDROCK_CLAUDE_MODELS.slice()
+    }
   }
 
-  getModelsEndpoint() { return null }
-  parseModelsResponse() { return BEDROCK_CLAUDE_MODELS.slice() }
+  // The control plane lives at the same host with the `-runtime` segment
+  // stripped: bedrock-runtime.{region}.amazonaws.com (invoke) ->
+  // bedrock.{region}.amazonaws.com (ListInferenceProfiles). Returns null when
+  // no distinct control-plane host can be derived (custom/relative baseUrl),
+  // which disables live discovery and leaves the static fallback in place.
+  getModelsEndpoint() {
+    const base = this.config.baseUrl || ''
+    const controlPlane = base.replace('bedrock-runtime.', 'bedrock.')
+    if (!controlPlane || controlPlane === base) return null
+    return `${controlPlane}/inference-profiles`
+  }
+
+  // ListInferenceProfiles returns
+  //   { inferenceProfileSummaries: [{ inferenceProfileId, ... }] }
+  // Keep only Anthropic Claude profiles (us.* and global.*) — those ids are
+  // exactly what InvokeModel expects in the URL path.
+  parseModelsResponse(data) {
+    const summaries = data?.inferenceProfileSummaries
+    if (!Array.isArray(summaries)) return BEDROCK_CLAUDE_MODELS.slice()
+    const ids = summaries
+      .map(p => p?.inferenceProfileId)
+      .filter(id => typeof id === 'string' && id.includes('anthropic.claude'))
+    return ids.length ? ids : BEDROCK_CLAUDE_MODELS.slice()
+  }
 }
 
 // Parser for AWS event-stream framing (application/vnd.amazon.eventstream).

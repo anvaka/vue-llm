@@ -46,6 +46,7 @@ export const DEFAULT_RATES = {
   },
 
   anthropic: {
+    'claude-opus-4-8':   { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
     'claude-opus-4-7':   { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
     'claude-opus-4-6':   { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
     'claude-sonnet-4-6': { input: 3.00, output: 15.00, cachedInput: 0.30, cacheCreation: 3.75 },
@@ -56,6 +57,7 @@ export const DEFAULT_RATES = {
   // Bedrock charges the same per-token rates as Anthropic direct for the
   // Claude inference profiles; the model IDs differ (us.anthropic.* prefix).
   bedrock: {
+    'us.anthropic.claude-opus-4-8':   { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
     'us.anthropic.claude-opus-4-7':   { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
     'us.anthropic.claude-opus-4-6':   { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
     'us.anthropic.claude-sonnet-4-6': { input: 3.00, output: 15.00, cachedInput: 0.30, cacheCreation: 3.75 },

@@ -17,13 +17,16 @@ export class AnthropicProvider extends BaseProvider {
       messages: converted,
       stream: options.stream || false
     }
-    // Claude Opus 4.7 deprecated `temperature` (along with top_p / top_k);
-    // non-default values return 400 ("temperature is deprecated for this
-    // model."). Older models — including claude-opus-4-6, claude-sonnet-4-6,
-    // claude-haiku-4-5, and the 3.x family — still accept temperature. Match
-    // as a substring so Bedrock inference profiles (us.anthropic.claude-opus-
-    // 4-7-…) and any dated suffix variants are also covered.
-    if (!model.includes('claude-opus-4-7')) {
+    // Sampling parameters (temperature/top_p/top_k) were removed starting with
+    // Claude Opus 4.7 — sending them returns 400 ("temperature is deprecated
+    // for this model."). This is verifiable from the Bedrock control plane,
+    // which advertises `hideSamplingParameter: true` in a model's converse
+    // schema for exactly the affected models (confirmed live for opus-4-7 and
+    // opus-4-8; false for opus-4-6/4-5/4-1, the sonnet/haiku 4.x line, and the
+    // 3.x family, which all still accept temperature). Substring match so dated
+    // suffixes and the Bedrock us./global. inference-profile prefixes (e.g.
+    // us.anthropic.claude-opus-4-8) are covered too.
+    if (!samplingParamsRemoved(model)) {
       request.temperature = options.temperature ?? 0.7
     }
     const systemMessage = messages.find(msg => msg.role === 'system')
@@ -143,6 +146,14 @@ export class AnthropicProvider extends BaseProvider {
   buildHeaders() { const h = super.buildHeaders(); if (this.requiresAuth()) { h['anthropic-version'] = '2023-06-01'; h['anthropic-dangerous-direct-browser-access'] = 'true' } return h }
   getModelsEndpoint() { return `${this.config.baseUrl}/v1/models` }
   parseModelsResponse(data) { return data.data?.map(m => m.id) || [] }
+}
+
+// Opus 4.7 onward removed temperature/top_p/top_k. Bedrock surfaces this as
+// `hideSamplingParameter: true` in the model's converse schema, which is true
+// for exactly the opus-4-7 and opus-4-8 generations today. The range covers
+// 4-7/4-8/4-9; revisit when a new Opus line (e.g. opus-5) or opus-4-10 ships.
+export function samplingParamsRemoved(model) {
+  return /claude-opus-4-[789]/.test(model || '')
 }
 
 function mapFinishReason(reason) {
