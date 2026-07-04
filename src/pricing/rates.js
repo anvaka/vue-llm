@@ -54,15 +54,30 @@ export const DEFAULT_RATES = {
     'claude-haiku-4-5':  { input: 1.00, output:  5.00, cachedInput: 0.10, cacheCreation: 1.25 }
   },
 
-  // Bedrock charges the same per-token rates as Anthropic direct for the
-  // Claude inference profiles; the model IDs differ (us.anthropic.* prefix).
+  // Bedrock charges the same per-token rates as Anthropic direct for the Claude
+  // models; only the id form differs by backend. bedrock-runtime uses the
+  // cross-region inference profiles (us.anthropic.*); bedrock-mantle uses the
+  // Anthropic-native ids (anthropic.claude-*-v1). Both backends share this
+  // provider type ('bedrock'), so both id forms live here. Keys omit any -v1
+  // suffix so lookupRates' prefix match catches versioned ids.
   bedrock: {
     'us.anthropic.claude-opus-4-8':   { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
     'us.anthropic.claude-opus-4-7':   { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
     'us.anthropic.claude-opus-4-6':   { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
     'us.anthropic.claude-sonnet-4-6': { input: 3.00, output: 15.00, cachedInput: 0.30, cacheCreation: 3.75 },
     'us.anthropic.claude-sonnet-4-5': { input: 3.00, output: 15.00, cachedInput: 0.30, cacheCreation: 3.75 },
-    'us.anthropic.claude-haiku-4-5':  { input: 1.00, output:  5.00, cachedInput: 0.10, cacheCreation: 1.25 }
+    'us.anthropic.claude-haiku-4-5':  { input: 1.00, output:  5.00, cachedInput: 0.10, cacheCreation: 1.25 },
+    // bedrock-mantle ids
+    'anthropic.claude-opus-4-8':      { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
+    'anthropic.claude-opus-4-7':      { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
+    'anthropic.claude-opus-4-6':      { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
+    'anthropic.claude-sonnet-5':      { input: 3.00, output: 15.00, cachedInput: 0.30, cacheCreation: 3.75 },
+    'anthropic.claude-sonnet-4-6':    { input: 3.00, output: 15.00, cachedInput: 0.30, cacheCreation: 3.75 },
+    'anthropic.claude-sonnet-4-5':    { input: 3.00, output: 15.00, cachedInput: 0.30, cacheCreation: 3.75 },
+    'anthropic.claude-haiku-4-5':     { input: 1.00, output:  5.00, cachedInput: 0.10, cacheCreation: 1.25 },
+    // OpenAI frontier via /openai/v1/responses (usage billed on input/output tokens)
+    'openai.gpt-5.5':                 { input: 5.00, output: 30.00, cachedInput: 0.50 },
+    'openai.gpt-5.4':                 { input: 5.00, output: 30.00, cachedInput: 0.50 }
   },
 
   gemini: {

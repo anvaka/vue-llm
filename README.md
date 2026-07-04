@@ -3,7 +3,8 @@
 Browser-only LLM client + Vue 3 plugin, provider adapters, and lightweight components.
 
 ## Features
-- Provider factory with 10 built-in providers (OpenAI, Anthropic, Bedrock, Grok, Gemini, Ollama, Llama Server, OpenRouter, DeepSeek, Custom) – extend with `registerProvider()`
+- Provider factory with 10 built-in providers (OpenAI, Anthropic, AWS, Grok, Gemini, Ollama, Llama Server, OpenRouter, DeepSeek, Custom) – extend with `registerProvider()`
+- **AWS** runs on the Bedrock Mantle endpoint and exposes the entire catalog (Claude, GPT-OSS, Qwen, Mistral, Gemma, …) from one model list — each request is routed to the right API surface automatically (Claude → Anthropic Messages, everything else → OpenAI Chat Completions)
 - LocalStorage-based config store (custom storage adapter supported)
 - Streaming + promise requests via `llmClient.stream()`
 - Normalized usage + USD cost on every response (override built-in rates per app or per model)

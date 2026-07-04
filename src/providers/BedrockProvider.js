@@ -126,8 +126,12 @@ export class BedrockProvider extends AnthropicProvider {
   // the control-plane host returns permissive CORS headers, so a browser fetch
   // works. When disabled (default) or on any failure, fall back to the static
   // list — existing apps keep working with zero surprise network calls.
-  async discoverModels(timeoutMs = 10000) {
-    if (!this.config.liveModelDiscovery || !this.getModelsEndpoint()) {
+  // `force` is set when the user explicitly clicks Refresh in the UI; it
+  // bypasses the opt-in `liveModelDiscovery` gate so the button actually queries
+  // the control plane. Automatic loads (provider change / edit) leave `force`
+  // unset and keep the "no surprise network calls" default.
+  async discoverModels(timeoutMs = 10000, { force = false } = {}) {
+    if ((!force && !this.config.liveModelDiscovery) || !this.getModelsEndpoint()) {
       return BEDROCK_CLAUDE_MODELS.slice()
     }
     try {

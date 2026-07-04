@@ -35,14 +35,40 @@
             </template>
 
             <template v-if="config.provider">
-              <label class="llm-field-label">Base URL:</label>
-              <input 
-                v-model="config.baseUrl" 
-                type="url" 
-                :placeholder="selectedProviderConfig?.baseUrl"
-                class="llm-form-control"
-                required
-              />
+              <!-- Region-based providers (AWS): pick a region and, when the
+                   provider offers multiple backends (Mantle / Bedrock), toggle
+                   between them on the same line. The Base URL is derived from
+                   (backend, region). All other providers keep the plain Base
+                   URL field. -->
+              <template v-if="availableRegions.length">
+                <label class="llm-field-label">Region:</label>
+                <div class="llm-region-row">
+                  <select v-model="config.region" @change="onRegionChange" class="llm-form-control">
+                    <option v-for="r in availableRegions" :key="r" :value="r">{{ r }}</option>
+                  </select>
+                  <div v-if="availableBackends.length > 1" class="llm-backend-toggle">
+                    <button
+                      v-for="b in availableBackends"
+                      :key="b.key"
+                      type="button"
+                      class="llm-backend-btn"
+                      :class="{ active: config.backend === b.key }"
+                      @click="setBackend(b.key)"
+                    >{{ b.label }}</button>
+                  </div>
+                </div>
+              </template>
+
+              <template v-else>
+                <label class="llm-field-label">Base URL:</label>
+                <input
+                  v-model="config.baseUrl"
+                  type="url"
+                  :placeholder="selectedProviderConfig?.baseUrl"
+                  class="llm-form-control"
+                  required
+                />
+              </template>
 
               <template v-if="selectedProviderConfig?.requiresApiKey || config.provider === 'custom'">
                 <label class="llm-field-label">API Key:</label>
@@ -82,9 +108,9 @@
                     {{ model }}
                   </option>
                 </select>
-                <button 
+                <button
                   class="llm-btn llm-btn--ghost llm-btn--sm llm-refresh-btn"
-                  @click="loadModels"
+                  @click="refreshModels"
                   :disabled="!config.baseUrl || isLoadingModels"
                   title="Refresh models list"
                 >
@@ -306,9 +332,69 @@ const maxTokensInput = ref(null)
 // Judge provider storage key
 const JUDGE_PROVIDER_KEY = 'judge-provider'
 
-const selectedProviderConfig = computed(() => 
+const selectedProviderConfig = computed(() =>
   config.value.provider ? PROVIDER_CONFIGS[config.value.provider] : null
 )
+
+// Providers that carry a `regions` list (AWS) get a Region dropdown instead of
+// a hand-typed host; empty for everyone else.
+const availableRegions = computed(() => selectedProviderConfig.value?.regions || [])
+
+// Providers exposing multiple `backends` (AWS: Mantle / Bedrock) get a toggle.
+// Normalized to [{ key, label, baseUrlTemplate }]; empty otherwise.
+const availableBackends = computed(() => {
+  const b = selectedProviderConfig.value?.backends
+  return b
+    ? Object.entries(b).map(([key, v]) => ({ key, label: v.label || key, baseUrlTemplate: v.baseUrlTemplate }))
+    : []
+})
+
+// The baseUrl template for the active backend, or the provider-level template.
+const currentBaseUrlTemplate = () => {
+  const pc = selectedProviderConfig.value
+  if (pc?.backends && config.value.backend) return pc.backends[config.value.backend]?.baseUrlTemplate
+  return pc?.baseUrlTemplate
+}
+
+// Rebuild the Base URL from the active (backend, region).
+const applyBaseUrl = () => {
+  const tpl = currentBaseUrlTemplate()
+  if (tpl && config.value.region) config.value.baseUrl = tpl.replace('{region}', config.value.region)
+}
+
+const onRegionChange = () => {
+  applyBaseUrl()
+  config.value.model = ''
+  loadModels()
+}
+
+const setBackend = (key) => {
+  if (config.value.backend === key) return
+  config.value.backend = key
+  applyBaseUrl()
+  config.value.model = ''      // model lists differ between backends
+  loadModels()
+}
+
+// Extract the region captured by a `{region}` template from a saved baseUrl,
+// or null if it doesn't match (custom / PrivateLink host).
+const matchRegion = (tpl, baseUrl) => {
+  if (!tpl || !baseUrl) return null
+  const escaped = tpl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const rx = new RegExp('^' + escaped.replace('\\{region\\}', '([^.]+)') + '$')
+  const m = baseUrl.match(rx)
+  return m ? m[1] : null
+}
+
+// Recover which backend a saved baseUrl belongs to by matching each template.
+const inferBackend = (providerConfig, baseUrl) => {
+  const backends = providerConfig?.backends
+  if (!backends) return ''
+  for (const [key, v] of Object.entries(backends)) {
+    if (matchRegion(v.baseUrlTemplate, baseUrl) != null) return key
+  }
+  return providerConfig.defaultBackend || Object.keys(backends)[0]
+}
 
 const modelCapabilities = ref(new Set())
 
@@ -373,7 +459,15 @@ const updateStoredKeysCount = () => {
 const onProviderChange = async () => {
   const providerConfig = selectedProviderConfig.value
   if (providerConfig) {
-    config.value.baseUrl = providerConfig.baseUrl
+    if (providerConfig.regions?.length) {
+      config.value.region = providerConfig.defaultRegion
+      config.value.backend = providerConfig.defaultBackend || ''
+      applyBaseUrl()
+    } else {
+      config.value.region = ''
+      config.value.backend = ''
+      config.value.baseUrl = providerConfig.baseUrl
+    }
     config.value.model = ''
     config.value.enableThinking = false
     modelCapabilities.value.clear()
@@ -393,7 +487,11 @@ const onProviderChange = async () => {
   modelLoadError.value = null
 }
 
-const loadModels = async () => {
+// Explicit user click on Refresh forces live discovery (bypasses opt-in gates
+// like Bedrock's liveModelDiscovery); automatic loads stay lightweight.
+const refreshModels = () => loadModels({ force: true })
+
+const loadModels = async (opts = {}) => {
   if (!config.value.provider || !config.value.baseUrl) {
     availableModels.value = []
     modelLoadError.value = null
@@ -402,9 +500,9 @@ const loadModels = async () => {
 
   isLoadingModels.value = true
   modelLoadError.value = null
-  
+
   try {
-    const models = await getAvailableModels(config.value.provider, config.value)
+    const models = await getAvailableModels(config.value.provider, config.value, opts)
     availableModels.value = models
     
     if (models.length > 0 && !config.value.model) {
@@ -508,8 +606,8 @@ const testAndSave = async () => {
       refreshProviders()
       resetForm()
       emitConfigChanged()
-      
-      setTimeout(() => emit('close'), 1500)
+      // Stay open after saving — resetForm() returns to the provider list where
+      // the saved provider now appears, so you can add/edit another.
     } else {
       testResult.value = { success: false, message: 'Failed to save configuration.' }
     }
@@ -546,6 +644,17 @@ const testProvider = async (provider) => {
 
 const editProvider = (provider) => {
   config.value = { ...provider }
+  // Saved before the region/backend UI existed (or missing fields)? Recover
+  // both from the stored Base URL so the controls reflect reality.
+  const pc = PROVIDER_CONFIGS[provider.provider]
+  if (pc?.backends) {
+    if (!config.value.backend) config.value.backend = inferBackend(pc, provider.baseUrl)
+    if (!config.value.region) {
+      config.value.region = matchRegion(pc.backends[config.value.backend]?.baseUrlTemplate, provider.baseUrl) || pc.defaultRegion
+    }
+  } else if (pc?.baseUrlTemplate && !config.value.region) {
+    config.value.region = matchRegion(pc.baseUrlTemplate, provider.baseUrl) || pc.defaultRegion
+  }
   isEditing.value = true
   editingProviderId.value = provider.id
   testResult.value = null
@@ -993,6 +1102,50 @@ onUnmounted(() => {
   white-space: nowrap;
   color: var(--llm-text, #e6e8ea);
   font-size: var(--llm-font-size-sm, 0.85rem);
+}
+
+/* Region + backend toggle (AWS) */
+.llm-region-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.llm-region-row .llm-form-control {
+  flex: 1;
+  min-width: 0;
+}
+
+.llm-backend-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  border: 1px solid var(--llm-border, #33383f);
+  border-radius: var(--llm-radius-sm, 4px);
+  overflow: hidden;
+}
+
+.llm-backend-btn {
+  padding: 0 0.75rem;
+  border: none;
+  background: var(--llm-bg, #181a1f);
+  color: var(--llm-text-dim, #9aa0a6);
+  cursor: pointer;
+  font-size: var(--llm-font-size-sm, 0.85rem);
+  transition: all 0.15s ease;
+}
+
+.llm-backend-btn + .llm-backend-btn {
+  border-left: 1px solid var(--llm-border, #33383f);
+}
+
+.llm-backend-btn:hover:not(.active) {
+  background: var(--llm-bg-mute, #242830);
+  color: var(--llm-text, #e6e8ea);
+}
+
+.llm-backend-btn.active {
+  background: var(--llm-accent, #6366f1);
+  color: var(--llm-bg, #181a1f);
 }
 
 /* API key field */

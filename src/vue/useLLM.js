@@ -133,9 +133,9 @@ export function useLLM() {
   /**
    * Get available models for a provider configuration.
    */
-  async function getAvailableModels(providerType, config) {
+  async function getAvailableModels(providerType, config, { force = false } = {}) {
     const providerInstance = createProvider(providerType, config)
-    return providerInstance.discoverModels()
+    return providerInstance.discoverModels(10000, { force })
   }
 
   /**
@@ -221,6 +221,8 @@ export function createDefaultConfig(provider) {
     name: '',
     provider,
     baseUrl: '',
+    region: '',
+    backend: '',
     apiKey: '',
     model: '',
     temperature: 0.7,
