@@ -148,12 +148,18 @@ export class AnthropicProvider extends BaseProvider {
   parseModelsResponse(data) { return data.data?.map(m => m.id) || [] }
 }
 
-// Opus 4.7 onward removed temperature/top_p/top_k. Bedrock surfaces this as
-// `hideSamplingParameter: true` in the model's converse schema, which is true
-// for exactly the opus-4-7 and opus-4-8 generations today. The range covers
-// 4-7/4-8/4-9; revisit when a new Opus line (e.g. opus-5) or opus-4-10 ships.
+// Opus 4.7 onward and the entire Claude 5 generation removed
+// temperature/top_p/top_k. Bedrock surfaces this as `hideSamplingParameter: true`
+// in the model's converse schema (additionalRequestFieldsSchema), confirmed live
+// against the control plane for opus-4-7, opus-4-8, sonnet-5 and fable-5 (all
+// true) and haiku-4-5 (false — a "-5" suffix that must stay allowed, hence the
+// family name must sit immediately before `-5`). The opus-4-[789] range covers
+// 4-7/4-8/4-9; revisit when opus-4-10 ships. Substring match so dated suffixes
+// (claude-sonnet-5-20260630) and the Bedrock us./global. inference-profile
+// prefixes (us.anthropic.claude-sonnet-5) are covered too.
 export function samplingParamsRemoved(model) {
-  return /claude-opus-4-[789]/.test(model || '')
+  const m = model || ''
+  return /claude-opus-4-[789]/.test(m) || /claude-(sonnet|opus|haiku|fable)-5(?!\d)/.test(m)
 }
 
 function mapFinishReason(reason) {
