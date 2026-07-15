@@ -28,22 +28,22 @@
                   <small>{{ keyData.serviceEndpoint }}</small>
                 </div>
                 <div class="llm-key-input-row">
-                  <input 
+                  <input
                     v-model="editValues[keyId]"
-                    :type="showKeys[keyId] ? 'text' : 'password'"
+                    type="password"
                     class="llm-form-control llm-key-input-inline"
                     :placeholder="keyData.maskedKey"
                     @keyup.enter="saveKey(keyId)"
                     @keyup.escape="cancelEdit(keyId)"
                     @blur="saveKey(keyId)"
                   />
-                  <button 
+                  <button
                     type="button"
                     class="llm-btn llm-btn--ghost llm-btn--sm"
-                    @click="toggleKeyVisibility(keyId)"
-                    :title="showKeys[keyId] ? 'Hide key' : 'Show key'"
+                    @click="copyKey(keyId)"
+                    :title="copiedKeyId === keyId ? 'Copied to clipboard' : 'Copy key to clipboard'"
                   >
-                    {{ showKeys[keyId] ? 'Hide' : 'Show' }}
+                    {{ copiedKeyId === keyId ? 'Copied' : 'Copy' }}
                   </button>
                   <button 
                     class="llm-btn llm-btn--sm llm-btn--danger"
@@ -142,7 +142,7 @@ const {
 // Reactive data
 const storedKeys = ref({})
 const editValues = ref({})
-const showKeys = ref({})
+const copiedKeyId = ref(null)
 const showAddForm = ref(false)
 const newKeyProvider = ref('')
 const newKeyValue = ref('')
@@ -187,9 +187,6 @@ const refreshStoredKeys = () => {
     if (!editValues.value[keyId]) {
       editValues.value[keyId] = ''
     }
-    if (showKeys.value[keyId] === undefined) {
-      showKeys.value[keyId] = false
-    }
   }
   
   storedKeys.value = formattedKeys
@@ -204,11 +201,40 @@ const formatDate = (dateString) => {
   return new Date(dateString).toLocaleDateString()
 }
 
-const toggleKeyVisibility = (keyId) => {
-  showKeys.value[keyId] = !showKeys.value[keyId]
-  if (showKeys.value[keyId] && !editValues.value[keyId]) {
-    editValues.value[keyId] = getStoredKey(keyId) || ''
+const copyKey = async (keyId) => {
+  const key = getStoredKey(keyId)
+  if (!key) return
+
+  const markCopied = () => {
+    copiedKeyId.value = keyId
+    setTimeout(() => {
+      if (copiedKeyId.value === keyId) copiedKeyId.value = null
+    }, 1500)
   }
+
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(key)
+      markCopied()
+      return
+    }
+  } catch {
+    // Fall through to the legacy fallback below (e.g. insecure context).
+  }
+
+  // Fallback for browsers / contexts without the async clipboard API.
+  const textarea = document.createElement('textarea')
+  textarea.value = key
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  try {
+    if (document.execCommand('copy')) markCopied()
+  } catch {
+    // Clipboard unavailable; leave the button label unchanged.
+  }
+  document.body.removeChild(textarea)
 }
 
 const saveKey = (keyId) => {
@@ -236,7 +262,6 @@ const saveKey = (keyId) => {
 
 const cancelEdit = (keyId) => {
   editValues.value[keyId] = ''
-  showKeys.value[keyId] = false
 }
 
 const confirmDeleteKey = (keyId) => {
