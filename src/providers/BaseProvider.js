@@ -98,6 +98,18 @@ export class BaseProvider {
     const requestId = options.requestId || this.generateRequestId()
     this.activeRequests.set(requestId, abortController)
 
+    // An optional caller-supplied signal is the second way to cancel this
+    // stream. It exists because the id-keyed route above only helps a caller
+    // that KNOWS the id, and runAgentLoop mints its own id per iteration and
+    // never surfaces it — leaving an agent loop with no way to stop. Linked to
+    // our own controller rather than replacing it, so cancelRequest(requestId)
+    // and cancelAllRequests() keep working exactly as before.
+    const onExternalAbort = () => abortController.abort()
+    if (options.signal) {
+      if (options.signal.aborted) abortController.abort()
+      else options.signal.addEventListener('abort', onExternalAbort, { once: true })
+    }
+
     try {
       const response = await this.makeStreamingRequest(request, abortController.signal)
 
@@ -195,11 +207,18 @@ export class BaseProvider {
       return { content: fullContent, thinking: fullThinking, toolCalls: finalizeToolCalls(), usage: fullUsage }
     } catch (error) {
       if (error.name === 'AbortError') {
-        throw new Error('Request cancelled')
+        // Keep the historical message, but carry the name through: rewriting a
+        // cancellation into a bare Error made it indistinguishable from a real
+        // failure, so callers had to string-match to tell "the user stopped it"
+        // from "the request broke".
+        const cancelled = new Error('Request cancelled')
+        cancelled.name = 'AbortError'
+        throw cancelled
       }
       throw error
     } finally {
       this.activeRequests.delete(requestId)
+      options.signal?.removeEventListener('abort', onExternalAbort)
     }
   }
 
