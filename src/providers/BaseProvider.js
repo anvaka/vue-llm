@@ -1,5 +1,7 @@
 // Base provider class for all LLM providers (browser-only)
 
+import { samplingModeFor, samplingKey, recordSamplingConstraint, classifyTemperatureError, SAMPLING_MODE } from './samplingPolicy.js'
+
 export class BaseProvider {
   constructor(config) {
     this.config = config
@@ -21,6 +23,71 @@ export class BaseProvider {
 
   processResponse(response) {
     throw new Error('processResponse must be implemented by subclass')
+  }
+
+  // Set (or omit) `request.temperature` per the model's sampling policy. Every
+  // provider whose wire format carries a top-level temperature calls this after
+  // building the request literal, instead of hand-writing
+  // `temperature: options.temperature ?? 0.7`. Centralizes the policy so it
+  // travels across transports and stays in one place. Returns `request`.
+  applySamplingParams(request, options = {}) {
+    const model = request.model || this.config?.model || ''
+    const requested = options.temperature ?? this.config?.temperature ?? 0.7
+    const mode = samplingModeFor(this.#samplingKey(model), model)
+    if (mode === SAMPLING_MODE.OMIT) delete request.temperature
+    else request.temperature = mode === SAMPLING_MODE.ONE ? 1 : requested
+    return request
+  }
+
+  #samplingKey(model) {
+    const endpoint = this.getEndpoint()
+    // Prefer the URL host so every path on the same endpoint shares one memo
+    // entry. When getEndpoint() isn't an absolute URL (a relative/empty
+    // baseUrl), fall back to the raw endpoint string rather than '' — otherwise
+    // two unrelated relative-URL gateways serving the same model id would
+    // collapse to one key and cross-contaminate each other's learned constraint.
+    let host = endpoint || ''
+    try { host = new URL(endpoint).host } catch { /* non-URL endpoint: keep raw */ }
+    return samplingKey(host, model)
+  }
+
+  // On a 400 whose body complains about `temperature`, correct the request in
+  // place (drop it, or pin it to 1). Returns the applied SAMPLING_MODE (a truthy
+  // string) if the request was adjusted and is worth retrying once, else null.
+  // NOTE: this does NOT record the learned constraint — the caller does that only
+  // after the corrected request actually succeeds, so a transient 400 whose retry
+  // also fails can't permanently poison the memo for this (host, model).
+  #adjustForTemperatureError(request, errorText) {
+    if (!('temperature' in request)) return null
+    const mode = classifyTemperatureError(errorText)
+    if (!mode) return null
+    if (mode === SAMPLING_MODE.OMIT) delete request.temperature
+    else request.temperature = 1
+    return mode
+  }
+
+  // Send `request` via the given closure; on a temperature-related 400, correct
+  // the request in place, retry once, and — only when that corrected retry
+  // succeeds — memoize the constraint for this (host, model). Shared by the JSON
+  // and streaming paths (and reused by BedrockProvider's URL-in-path override),
+  // so the recovery ladder lives in exactly one place. `errorLabel` prefixes the
+  // thrown message so each transport keeps its own wording. Returns the ok
+  // Response; throws on any unrecoverable error.
+  async _sendWithTemperatureRetry(send, request, errorLabel = 'LLM API Error') {
+    let response = await send()
+    if (response.ok) return response
+    const errorText = await response.text()
+    const mode = response.status === 400
+      ? this.#adjustForTemperatureError(request, errorText)
+      : null
+    if (!mode) throw new Error(`${errorLabel} (${response.status}): ${errorText}`)
+
+    response = await send()
+    if (!response.ok) {
+      throw new Error(`${errorLabel} (${response.status}): ${await response.text()}`)
+    }
+    recordSamplingConstraint(this.#samplingKey(request.model || this.config?.model || ''), mode)
+    return response
   }
 
   async streamRequest(messages, options, onChunk) {
@@ -147,18 +214,15 @@ export class BaseProvider {
 
     try {
       const headers = this.buildHeaders()
-      const response = await fetch(this.getEndpoint(), {
+      const activeSignal = abortController.signal || signal
+      const send = () => fetch(this.getEndpoint(), {
         method: 'POST',
         headers,
         body: JSON.stringify(request),
-        signal: abortController.signal || signal
+        signal: activeSignal
       })
 
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(`LLM API Error (${response.status}): ${errorText}`)
-      }
-
+      const response = await this._sendWithTemperatureRetry(send, request)
       return response.json()
     } catch (error) {
       if (error.name === 'AbortError') {
@@ -174,19 +238,14 @@ export class BaseProvider {
 
   async makeStreamingRequest(request, signal) {
     const headers = this.buildHeaders()
-    const response = await fetch(this.getStreamingEndpoint(), {
+    const send = () => fetch(this.getStreamingEndpoint(), {
       method: 'POST',
       headers,
       body: JSON.stringify(request),
       signal
     })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      throw new Error(`LLM API Error (${response.status}): ${errorText}`)
-    }
-
-    return response
+    // A temperature 400 is recoverable: correct the request and retry once.
+    return this._sendWithTemperatureRetry(send, request)
   }
 
   buildHeaders() {
