@@ -13,10 +13,10 @@ export class DeepSeekProvider extends BaseProvider {
     const request = {
       model: options.model || this.config.model || 'deepseek-chat',
       messages: convertMessagesForDeepSeek(messages),
-      temperature: options.temperature ?? 0.7,
       max_tokens: options.maxTokens || 1000,
       stream: options.stream || false
     }
+    this.applySamplingParams(request, options)
     if (request.stream) request.stream_options = { include_usage: true }
     if (options.tools && this.capabilities.has('tools')) {
       request.tools = options.tools

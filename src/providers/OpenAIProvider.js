@@ -1,11 +1,12 @@
 // OpenAI provider implementation (extracted)
 import { BaseProvider } from './BaseProvider.js'
+import { isOpenAIReasoningModel } from './samplingPolicy.js'
 
 export class OpenAIProvider extends BaseProvider {
   async detectCapabilities() {
     if (!this.config.model) return
     const id = this.config.model.toLowerCase()
-    if (id.startsWith('o1') || id.startsWith('o2') || id.startsWith('o3') || id.startsWith('o-') || id.includes('gpt-5') || id === 'gpt5') {
+    if (isOpenAIReasoningModel(id)) {
       this.capabilities.add('thinking')
     }
     if (id.includes('gpt-4') && id.includes('vision')) {
@@ -21,7 +22,6 @@ export class OpenAIProvider extends BaseProvider {
     const request = {
       model,
       messages: this.processMessages(messages, options),
-      temperature: options.temperature ?? 0.7,
       stream: options.stream || false
     }
     // OpenAI omits the usage block from streamed responses unless this flag
@@ -30,11 +30,11 @@ export class OpenAIProvider extends BaseProvider {
 
     if (this.#requiresMaxCompletionTokens(model)) {
       request.max_completion_tokens = options.maxTokens || 1000
-      // Reasoning models require fixed/default temperature
-      request.temperature = 1
     } else {
       request.max_tokens = options.maxTokens || 1000
     }
+    // Temperature per the model's sampling policy (reasoning models -> fixed 1).
+    this.applySamplingParams(request, options)
 
     if (options.enableThinking && this.capabilities.has('thinking')) {
       request.reasoning_effort = options.reasoningEffort || 'medium'
@@ -48,11 +48,11 @@ export class OpenAIProvider extends BaseProvider {
 
   #requiresMaxCompletionTokens(modelId) {
     const id = (modelId || '').toLowerCase()
-    return (
-      id.startsWith('o1') || id.startsWith('o2') || id.startsWith('o3') || id.startsWith('o-') ||
-      id.includes('gpt-5') || id === 'gpt5' || id.includes('reasoning') ||
-      this.capabilities.has('thinking')
-    )
+    // Broader than the temperature predicate on purpose: the whole gpt-5 family
+    // (incl. the conversational gpt-5-chat, which isOpenAIReasoningModel excludes)
+    // uses max_completion_tokens, and any model we detected as a thinking model
+    // does too.
+    return isOpenAIReasoningModel(id) || id.includes('gpt-5') || this.capabilities.has('thinking')
   }
 
   processMessages(messages, options) {

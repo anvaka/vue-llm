@@ -1,4 +1,8 @@
 import { BaseProvider } from './BaseProvider.js'
+// The Claude-5 / Opus-4.7+ "no sampling params" rule now lives in the shared,
+// provider-agnostic policy module (samplingPolicy.js), applied via
+// BaseProvider.applySamplingParams so it covers every transport (OpenRouter,
+// custom gateways) that may carry a Claude id — not just this native provider.
 
 export class AnthropicProvider extends BaseProvider {
   async detectCapabilities() {
@@ -17,18 +21,10 @@ export class AnthropicProvider extends BaseProvider {
       messages: converted,
       stream: options.stream || false
     }
-    // Sampling parameters (temperature/top_p/top_k) were removed starting with
-    // Claude Opus 4.7 — sending them returns 400 ("temperature is deprecated
-    // for this model."). This is verifiable from the Bedrock control plane,
-    // which advertises `hideSamplingParameter: true` in a model's converse
-    // schema for exactly the affected models (confirmed live for opus-4-7 and
-    // opus-4-8; false for opus-4-6/4-5/4-1, the sonnet/haiku 4.x line, and the
-    // 3.x family, which all still accept temperature). Substring match so dated
-    // suffixes and the Bedrock us./global. inference-profile prefixes (e.g.
-    // us.anthropic.claude-opus-4-8) are covered too.
-    if (!samplingParamsRemoved(model)) {
-      request.temperature = options.temperature ?? 0.7
-    }
+    // Temperature per the model's sampling policy: Opus 4.7+ / the Claude-5
+    // generation dropped sampling params and 400 if sent — applySamplingParams
+    // omits the field for those and passes it through otherwise.
+    this.applySamplingParams(request, options)
     const systemMessage = messages.find(msg => msg.role === 'system')
     if (systemMessage) request.system = systemMessage.content
     if (options.tools && this.capabilities.has('tools')) {
@@ -146,20 +142,6 @@ export class AnthropicProvider extends BaseProvider {
   buildHeaders() { const h = super.buildHeaders(); if (this.requiresAuth()) { h['anthropic-version'] = '2023-06-01'; h['anthropic-dangerous-direct-browser-access'] = 'true' } return h }
   getModelsEndpoint() { return `${this.config.baseUrl}/v1/models` }
   parseModelsResponse(data) { return data.data?.map(m => m.id) || [] }
-}
-
-// Opus 4.7 onward and the entire Claude 5 generation removed
-// temperature/top_p/top_k. Bedrock surfaces this as `hideSamplingParameter: true`
-// in the model's converse schema (additionalRequestFieldsSchema), confirmed live
-// against the control plane for opus-4-7, opus-4-8, sonnet-5 and fable-5 (all
-// true) and haiku-4-5 (false — a "-5" suffix that must stay allowed, hence the
-// family name must sit immediately before `-5`). The opus-4-[789] range covers
-// 4-7/4-8/4-9; revisit when opus-4-10 ships. Substring match so dated suffixes
-// (claude-sonnet-5-20260630) and the Bedrock us./global. inference-profile
-// prefixes (us.anthropic.claude-sonnet-5) are covered too.
-export function samplingParamsRemoved(model) {
-  const m = model || ''
-  return /claude-opus-4-[789]/.test(m) || /claude-(sonnet|opus|haiku|fable)-5(?!\d)/.test(m)
 }
 
 function mapFinishReason(reason) {

@@ -42,8 +42,6 @@ export class BedrockProvider extends AnthropicProvider {
 
   async makeRequest(request, signal, requestId) {
     const model = request.model
-    const body = { ...request }
-    delete body.model
     const url = `${this.config.baseUrl}/model/${encodeURIComponent(model)}/invoke`
 
     const abortController = signal ? { signal } : new AbortController()
@@ -51,17 +49,21 @@ export class BedrockProvider extends AnthropicProvider {
       requestId = requestId || this.generateRequestId()
       this.activeRequests.set(requestId, abortController)
     }
-    try {
-      const response = await fetch(url, {
+    // Re-snapshot the body per attempt so the temperature self-heal (which
+    // mutates `request` in place) is picked up on retry. `model` lives in the URL,
+    // not the body.
+    const send = () => {
+      const body = { ...request }
+      delete body.model
+      return fetch(url, {
         method: 'POST',
         headers: this.buildHeaders(),
         body: JSON.stringify(body),
         signal: abortController.signal || signal
       })
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(`Bedrock API Error (${response.status}): ${errorText}`)
-      }
+    }
+    try {
+      const response = await this._sendWithTemperatureRetry(send, request, 'Bedrock API Error')
       return response.json()
     } finally {
       if (!signal && requestId) this.activeRequests.delete(requestId)
@@ -70,20 +72,19 @@ export class BedrockProvider extends AnthropicProvider {
 
   async makeStreamingRequest(request, signal) {
     const model = request.model
-    const body = { ...request }
-    delete body.model
     const url = `${this.config.baseUrl}/model/${encodeURIComponent(model)}/invoke-with-response-stream`
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers: this.buildHeaders(),
-      body: JSON.stringify(body),
-      signal
-    })
-    if (!upstream.ok) {
-      const errorText = await upstream.text()
-      throw new Error(`Bedrock API Error (${upstream.status}): ${errorText}`)
+    const send = () => {
+      const body = { ...request }
+      delete body.model
+      return fetch(url, {
+        method: 'POST',
+        headers: this.buildHeaders(),
+        body: JSON.stringify(body),
+        signal
+      })
     }
+
+    const upstream = await this._sendWithTemperatureRetry(send, request, 'Bedrock API Error')
 
     // Wrap the binary event-stream body in a ReadableStream that emits
     // SSE-formatted text lines. AnthropicProvider.parseStreamingLine already
