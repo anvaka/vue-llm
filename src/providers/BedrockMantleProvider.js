@@ -8,6 +8,7 @@ export const BEDROCK_MANTLE_CLAUDE_MODELS = [
   'anthropic.claude-opus-4-8',
   'anthropic.claude-opus-4-7',
   'anthropic.claude-sonnet-5',
+  'anthropic.claude-fable-5',
   'anthropic.claude-haiku-4-5'
 ]
 
@@ -198,15 +199,21 @@ export class BedrockMantleProvider extends BaseProvider {
 
   _active() { return this._order(this.config.model)[0] }
 
+  // Detect on EVERY sub, not just the active one. _active() is not stable: the
+  // first successful request caches its winning transport in _resolved, which
+  // re-points _order() — and so _active() — at a sub that initialize() never
+  // touched. Its capability set would still be the empty one from the ctor, so
+  // hasCapability('tools') would answer false for a model that had just
+  // finished calling tools, and the NEXT agent turn would refuse to start.
+  // These detectCapabilities are pure id matching with no network, so covering
+  // all four transports costs nothing.
   async initialize() {
-    const a = this._active()
-    await a.initialize()
-    this.capabilities = a.capabilities // share the active sub's set
+    await Promise.all(this._subs().map(s => s.initialize()))
+    this.capabilities = this._active().capabilities // share the active sub's set
   }
   async detectCapabilities() {
-    const a = this._active()
-    await a.detectCapabilities()
-    this.capabilities = a.capabilities
+    await Promise.all(this._subs().map(s => s.detectCapabilities()))
+    this.capabilities = this._active().capabilities
   }
   hasCapability(cap) { return this._active().hasCapability(cap) }
 
@@ -237,7 +244,12 @@ export class BedrockMantleProvider extends BaseProvider {
     for (const sub of this._order(m)) {
       try {
         const result = await attempt(sub)
+        // Caching the winner can re-point _order()/_active() at `sub`, so
+        // re-derive the shared set or getCapabilities() keeps describing the
+        // transport we just stopped using. When m isn't the configured model
+        // _active() is unchanged and this re-assigns the same set.
         this._resolved.set(m, sub)
+        this.capabilities = this._active().capabilities
         return result
       } catch (e) {
         if (isUnsupportedApiError(e)) { lastErr = e; continue }

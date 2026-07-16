@@ -152,6 +152,18 @@ export class LLMClient {
   //
   // `onEvent` (optional) fires for: iter-start, text-delta, tool-call-delta,
   // assistant-message, tool-call, tool-result, stop. Use it to drive a trace UI.
+  // `signal` (optional AbortSignal) stops the loop. It is the only way to end a
+  // run that is mid-stream: every other exit is the model's decision (it stopped
+  // calling tools) or a backstop (maxIters). Cancelling aborts the in-flight
+  // fetch, so it stops the spend immediately rather than asking the model to
+  // wind down — which would cost another full round-trip per iteration.
+  //
+  // Every abort path leaves `messages` VALID to resume from, which is the whole
+  // design constraint here: cancel during the stream and we break before the
+  // assistant message is appended; cancel during tool execution and we still
+  // record a result for every tool_call. A transcript carrying tool_calls with
+  // no matching tool result is a 400 on the next request — a "stop" that
+  // stranded the conversation would be worse than no stop at all.
   async runAgentLoop({
     messages,
     tools,
@@ -161,7 +173,8 @@ export class LLMClient {
     temperature,
     model,
     maxTokens,
-    enableThinking
+    enableThinking,
+    signal
   } = {}) {
     await this.ensureInitialized()
     if (!this.provider.hasCapability('tools')) {
@@ -176,6 +189,7 @@ export class LLMClient {
     const totalUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, cacheCreationInputTokens: 0, reasoningTokens: 0 }
     let usageSeen = false
     while (iter < maxIters) {
+      if (signal?.aborted) { stopReason = 'aborted'; break }
       iter++
       onEvent && onEvent({ type: 'iter-start', iter })
       const validated = this.validateCapabilities({
@@ -189,12 +203,25 @@ export class LLMClient {
         // Re-sends the whole growing conversation each turn, so cache the
         // rolling transcript prefix (Anthropic-family providers honor this).
         cacheTranscript: true,
-        requestId: this.generateRequestId()
+        requestId: this.generateRequestId(),
+        // validateCapabilities spreads its input, so this reaches streamRequest,
+        // which links it to the fetch's own controller.
+        signal
       })
-      const result = await this.provider.streamRequest(conversation, validated, (chunk) => {
-        if (chunk.content) onEvent && onEvent({ type: 'text-delta', text: chunk.content })
-        if (chunk.toolCallDelta) onEvent && onEvent({ type: 'tool-call-delta', delta: chunk.toolCallDelta })
-      })
+      let result
+      try {
+        result = await this.provider.streamRequest(conversation, validated, (chunk) => {
+          if (chunk.content) onEvent && onEvent({ type: 'text-delta', text: chunk.content })
+          if (chunk.toolCallDelta) onEvent && onEvent({ type: 'tool-call-delta', delta: chunk.toolCallDelta })
+        })
+      } catch (err) {
+        // Cancelled mid-stream: a clean stop, not a failure. Breaking here —
+        // before the assistant message is appended — cuts the transcript on the
+        // user/tool message that prompted it, which is exactly where a resume
+        // wants to pick up. The partial text is dropped on purpose.
+        if (signal?.aborted || err?.name === 'AbortError') { stopReason = 'aborted'; break }
+        throw err
+      }
       const textContent = result?.content || ''
       const toolCalls = result?.toolCalls || []
       const thinking = result?.thinking || ''
@@ -225,7 +252,13 @@ export class LLMClient {
         onEvent && onEvent({ type: 'tool-call', id: tc.id, name: tc.name, args: tc.args })
         const exec = executors && executors[tc.name]
         let resultText
-        if (!exec) {
+        if (signal?.aborted) {
+          // Stop RUNNING tools, but keep answering them. Skipping the result
+          // outright would leave a tool_calls message with a hole in it, and the
+          // next request on this transcript would 400 — so a cancelled run could
+          // never be resumed or continued.
+          resultText = 'Error: cancelled by the user.'
+        } else if (!exec) {
           resultText = `Error: unknown tool '${tc.name}'`
         } else {
           try {
@@ -238,6 +271,7 @@ export class LLMClient {
         conversation.push({ role: 'tool', tool_call_id: tc.id, content: resultText })
         onEvent && onEvent({ type: 'tool-result', id: tc.id, name: tc.name, content: resultText })
       }
+      if (signal?.aborted) { stopReason = 'aborted'; break }
     }
     if (!stopReason) stopReason = 'max-iters'
     const finalUsage = usageSeen ? totalUsage : null

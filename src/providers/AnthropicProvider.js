@@ -4,12 +4,30 @@ import { BaseProvider } from './BaseProvider.js'
 // BaseProvider.applySamplingParams so it covers every transport (OpenRouter,
 // custom gateways) that may carry a Claude id — not just this native provider.
 
+// Pre-3 Claude (claude-2.x, claude-instant) has neither tool use nor vision;
+// every model since claude-3 has both. Matching the LEGACY set and defaulting
+// open is the only form that survives a new family: the old allowlist named the
+// families that existed when it was written ('claude-3', 'claude-sonnet',
+// 'claude-opus', 'claude-haiku'), so claude-fable-5 matched nothing and silently
+// came up with no tools and no vision — a false "this provider can't call tools"
+// that surfaces as runAgentLoop refusing to start, with no hint that a NAME was
+// the problem. An allowlist fails closed on everything not yet invented, which
+// is exactly backwards for a list that must predict future releases.
+// GeminiProvider already reached this conclusion ("so new releases don't
+// silently lose capabilities"); this is the same rule for Claude.
+//
+// Substring match, so bare ids (claude-2.1), Bedrock ids (anthropic.claude-v2:1)
+// and inference-profile prefixes (us.anthropic.claude-v2) are all covered. The
+// \b keeps `claude-2` from matching a dated id that merely starts with 2.
+const PRE_TOOL_CLAUDE = /claude-(instant|v?2)\b/
+
 export class AnthropicProvider extends BaseProvider {
   async detectCapabilities() {
-    if (this.config.model?.includes('claude-3') || this.config.model?.includes('claude-sonnet') || this.config.model?.includes('claude-opus') || this.config.model?.includes('claude-haiku')) {
-      this.capabilities.add('vision')
-      this.capabilities.add('tools')
-    }
+    // No model configured → prepareRequest falls back to claude-3-sonnet, which
+    // has both; so the default-open answer is also the correct one here.
+    if (PRE_TOOL_CLAUDE.test(this.config.model || '')) return
+    this.capabilities.add('vision')
+    this.capabilities.add('tools')
   }
 
   prepareRequest(messages, options) {
