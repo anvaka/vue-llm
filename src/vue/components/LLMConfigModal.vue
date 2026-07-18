@@ -130,6 +130,16 @@
                     Enable Thinking: Show model's reasoning process
                   </label>
                 </div>
+
+                <div v-if="supportsThinking && config.enableThinking && effortLevels.length" class="llm-effort-field">
+                  <label class="llm-field-label">Reasoning Effort:</label>
+                  <select v-model="config.reasoningEffort" class="llm-form-control">
+                    <option v-for="lvl in effortLevels" :key="lvl" :value="lvl">{{ effortLabel(lvl) }}</option>
+                  </select>
+                  <small class="llm-field-note">
+                    Higher effort spends more reasoning tokens for deeper, slower answers.
+                  </small>
+                </div>
               </div>
 
               <label class="llm-field-label">Temperature:</label>
@@ -279,6 +289,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useLLM, createDefaultConfig } from '../useLLM.js'
 import { createProvider, DEFAULT_CONFIGS } from '../../providers/factory.js'
+import { effortLevelsFor } from '../../providers/reasoningPolicy.js'
 import StoredKeysManager from './StoredKeysManager.vue'
 
 const props = defineProps({
@@ -401,6 +412,12 @@ const modelCapabilities = ref(new Set())
 const supportsThinking = computed(() => {
   return config.value.model && modelCapabilities.value.has('thinking')
 })
+
+// Effort levels the selected model accepts (empty when it has no graded effort
+// control). Drives the Reasoning Effort selector, shown only when thinking is on.
+const effortLevels = computed(() => effortLevelsFor(config.value.model) || [])
+
+const effortLabel = (lvl) => lvl.charAt(0).toUpperCase() + lvl.slice(1)
 
 // Fixed temperature for certain models
 const isFixedTemperature = computed(() => {
@@ -766,6 +783,19 @@ watch(() => config.value.model, (newModel) => {
 
 watch(() => config.value.temperature, (t) => {
   if (isFixedTemperature.value && t !== 1) config.value.temperature = 1
+})
+
+// Keep the chosen effort valid for the current model: when the model changes
+// (or an older saved config has no reasoningEffort), snap to the model's
+// default rather than leaving a level the model would reject.
+watch([effortLevels, () => config.value.enableThinking], () => {
+  const levels = effortLevels.value
+  if (!levels.length) return
+  if (!levels.includes(config.value.reasoningEffort)) {
+    config.value.reasoningEffort = levels.includes('medium')
+      ? 'medium'
+      : levels[Math.floor((levels.length - 1) / 2)]
+  }
 })
 
 // Stored Keys Manager
@@ -1201,6 +1231,12 @@ onUnmounted(() => {
 .llm-temperature-field {
   display: flex;
   flex-direction: column;
+}
+
+.llm-effort-field {
+  display: flex;
+  flex-direction: column;
+  margin-top: 0.5rem;
 }
 
 .llm-field-note {

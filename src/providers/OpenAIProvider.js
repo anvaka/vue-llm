@@ -36,9 +36,9 @@ export class OpenAIProvider extends BaseProvider {
     // Temperature per the model's sampling policy (reasoning models -> fixed 1).
     this.applySamplingParams(request, options)
 
-    if (options.enableThinking && this.capabilities.has('thinking')) {
-      request.reasoning_effort = options.reasoningEffort || 'medium'
-    }
+    // Reasoning effort (`reasoning_effort`) per the model's policy — only when
+    // thinking is on, and only for models that expose a graded effort control.
+    this.applyReasoningParams(request, options)
 
     if (options.tools && this.capabilities.has('tools')) {
       request.tools = options.tools

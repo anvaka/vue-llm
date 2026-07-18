@@ -1,4 +1,5 @@
 import { BaseProvider } from './BaseProvider.js'
+import { supportsReasoningEffort } from './reasoningPolicy.js'
 // The Claude-5 / Opus-4.7+ "no sampling params" rule now lives in the shared,
 // provider-agnostic policy module (samplingPolicy.js), applied via
 // BaseProvider.applySamplingParams so it covers every transport (OpenRouter,
@@ -28,6 +29,12 @@ export class AnthropicProvider extends BaseProvider {
     if (PRE_TOOL_CLAUDE.test(this.config.model || '')) return
     this.capabilities.add('vision')
     this.capabilities.add('tools')
+    // Claude models with a graded reasoning-effort control (Opus 4.6+, the
+    // Claude-5 generation) run adaptive thinking; expose the capability so the
+    // config UI offers the "Enable Thinking" toggle and the effort selector.
+    // Older Claude (claude-3, Sonnet/Haiku 4.5) has no effort control and stays
+    // thinking-less here.
+    if (supportsReasoningEffort(this.config.model)) this.capabilities.add('thinking')
   }
 
   prepareRequest(messages, options) {
@@ -43,6 +50,8 @@ export class AnthropicProvider extends BaseProvider {
     // generation dropped sampling params and 400 if sent — applySamplingParams
     // omits the field for those and passes it through otherwise.
     this.applySamplingParams(request, options)
+    // Reasoning effort per the model's policy (only when thinking is on).
+    this.applyReasoningParams(request, options)
     const systemMessage = messages.find(msg => msg.role === 'system')
     if (systemMessage) request.system = systemMessage.content
     if (options.tools && this.capabilities.has('tools')) {
@@ -50,6 +59,20 @@ export class AnthropicProvider extends BaseProvider {
       if (options.tool_choice) request.tool_choice = options.tool_choice
     }
     if (this.promptCachingEnabled(options)) applyPromptCaching(request, options)
+    return request
+  }
+
+  // The Anthropic Messages API expresses reasoning effort as
+  // `output_config.effort`, and it only bites when adaptive thinking is on —
+  // so we enable `thinking: {type:'adaptive'}` alongside it. (Opus 4.7+ and the
+  // Claude-5 generation removed the old `budget_tokens` knob; `output_config.effort`
+  // is the current control, and it also caps overall token spend.) Bedrock Mantle
+  // Claude inherits this via MantleClaudeProvider.
+  applyReasoningParams(request, options = {}) {
+    const level = this.reasoningEffortFor(request, options)
+    if (!level) return request
+    request.thinking = { type: 'adaptive' }
+    request.output_config = { ...(request.output_config || {}), effort: level }
     return request
   }
 

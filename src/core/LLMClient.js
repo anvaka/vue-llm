@@ -91,9 +91,16 @@ export class LLMClient {
     const shouldEnableThinking = options.enableThinking !== undefined
       ? options.enableThinking
       : this.config?.enableThinking || false
+    // Effort mirrors enableThinking's resolution: a per-call value wins, else
+    // the active config's. Providers clamp it to the model and gate it behind
+    // thinking, so passing it through unconditionally is safe.
+    const resolvedEffort = options.reasoningEffort !== undefined
+      ? options.reasoningEffort
+      : this.config?.reasoningEffort
     return {
       ...options,
       enableThinking: shouldEnableThinking && this.provider.hasCapability('thinking'),
+      reasoningEffort: resolvedEffort,
       images: options.images && this.provider.hasCapability('vision') ? options.images : null,
       tools: options.tools && this.provider.hasCapability('tools') ? options.tools : null
     }
@@ -174,6 +181,7 @@ export class LLMClient {
     model,
     maxTokens,
     enableThinking,
+    reasoningEffort,
     signal
   } = {}) {
     await this.ensureInitialized()
@@ -200,6 +208,7 @@ export class LLMClient {
         temperature: temperature ?? this.config.temperature,
         maxTokens: maxTokens ?? this.config.maxTokens ?? 4096,
         enableThinking: enableThinking ?? false,
+        reasoningEffort,
         // Re-sends the whole growing conversation each turn, so cache the
         // rolling transcript prefix (Anthropic-family providers honor this).
         cacheTranscript: true,
@@ -374,6 +383,7 @@ class StreamablePromise {
       temperature: this.options.temperature ?? config.temperature,
       maxTokens: this.options.maxTokens ?? config.maxTokens,
       enableThinking: this.options.enableThinking,
+      reasoningEffort: this.options.reasoningEffort,
       requestId: this.client.generateRequestId(),
       ...(this.options.images ? { images: this.options.images } : {}),
       ...(this.options.tools ? { tools: this.options.tools } : {})

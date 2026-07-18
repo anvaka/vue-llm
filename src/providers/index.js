@@ -8,3 +8,6 @@ export {
   PROVIDERS, DEFAULT_CONFIGS,
   createProvider, registerProvider, createProviderFlexible
 } from './factory.js'
+export {
+  effortLevelsFor, supportsReasoningEffort, resolveEffort, clampEffort, DEFAULT_EFFORT
+} from './reasoningPolicy.js'
