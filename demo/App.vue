@@ -37,6 +37,18 @@ const effortLevels = computed(() =>
 )
 const supportsEffort = computed(() => effortLevels.value.length > 0)
 
+// Explain an empty Thinking panel after a Run that requested thinking. Some
+// providers stream the reasoning text (native Anthropic, DeepSeek); others
+// return only a token count with the text redacted (AWS Bedrock); and adaptive
+// thinking may simply decline to think on an easy prompt.
+const thinkingNote = computed(() => {
+  if (!ranWithThinking.value || thinking.value) return ''
+  const rt = metrics.value?.usage?.reasoningTokens
+  if (rt > 0) return `This provider returned ${rt} reasoning tokens but redacts the reasoning text (typical of AWS Bedrock).`
+  if (rt === 0) return 'Adaptive thinking chose not to think on this prompt — try a harder question or higher effort.'
+  return 'No reasoning text was returned for this request.'
+})
+
 async function syncActive() {
   errorMsg.value = ''
   try { await client.ensureInitialized() } catch { /* not configured yet */ }
@@ -101,9 +113,14 @@ function payload(effortLevel, thinkingOn) {
   }
 }
 
+// Remember whether the last Run asked for thinking, so the output panel can
+// explain an empty thinking box (e.g. Bedrock redacts reasoning text).
+const ranWithThinking = ref(false)
+
 async function run() {
   if (!activeConfig.value) { errorMsg.value = 'Pick and configure a provider first.'; return }
   errorMsg.value = ''; answer.value = ''; thinking.value = ''; metrics.value = null; wire.value = null
+  ranWithThinking.value = enableThinking.value
   busy.value = true
   const t0 = performance.now()
   try {
@@ -242,6 +259,10 @@ function fmtNum(n) { return (n == null) ? '—' : n }
           <label class="lbl">Thinking</label>
           <pre class="think">{{ thinking }}</pre>
         </template>
+        <template v-else-if="thinkingNote">
+          <label class="lbl">Thinking</label>
+          <p class="think-note">{{ thinkingNote }}</p>
+        </template>
 
         <label class="lbl">Answer</label>
         <div class="answer" :class="{ empty: !answer }">{{ answer || '—' }}</div>
@@ -310,6 +331,7 @@ function fmtNum(n) { return (n == null) ? '—' : n }
 .wire { margin-top: 14px; }
 .wire pre, .think { background: #0c0f13; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 10px; font-size: 0.78rem; overflow-x: auto; white-space: pre-wrap; }
 .think { max-height: 200px; overflow-y: auto; color: #b9c0c8; }
+.think-note { margin: 0 0 4px; padding: 10px; font-size: 0.78rem; color: #9aa0a6; font-style: italic; background: #0c0f13; border: 1px dashed rgba(255,255,255,0.14); border-radius: 8px; }
 .metrics { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
 .metric { display: flex; flex-direction: column; background: rgba(255,255,255,0.05); border-radius: 8px; padding: 8px 12px; min-width: 74px; }
 .metric span { font-size: 0.66rem; text-transform: uppercase; color: var(--llm-text-dim, #9aa0a6); }

@@ -158,6 +158,11 @@ export class AnthropicProvider extends BaseProvider {
       if (parsed.delta?.type === 'text_delta') {
         return { content: parsed.delta?.text || '', thinking: '', done: false, usage: null, finishReason: null }
       }
+      // Extended-thinking text streams as `thinking_delta`; without this the
+      // reasoning is silently dropped (signature_delta carries no text).
+      if (parsed.delta?.type === 'thinking_delta') {
+        return { content: '', thinking: parsed.delta?.thinking || '', done: false, usage: null, finishReason: null }
+      }
       if (parsed.delta?.type === 'input_json_delta') {
         return {
           content: '',
@@ -207,6 +212,12 @@ export function normalizeAnthropicUsage(raw) {
   const out = { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, raw }
   if (raw.cache_read_input_tokens != null) out.cachedInputTokens = cacheRead
   if (raw.cache_creation_input_tokens != null) out.cacheCreationInputTokens = cacheCreate
+  // Bedrock (and newer Anthropic) report the thinking-token count here — a
+  // subset of output_tokens. Surface it so callers can show reasoning usage
+  // even when the reasoning text itself is redacted (Bedrock only returns an
+  // encrypted signature block, never streamed thinking text).
+  const reasoning = raw.output_tokens_details?.thinking_tokens
+  if (reasoning != null) out.reasoningTokens = reasoning
   return out
 }
 
