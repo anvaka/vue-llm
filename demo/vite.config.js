@@ -57,8 +57,14 @@ const PRESET_DEFS = [
 function buildPreconfig() {
   const secretsPath = process.env.DEMO_SECRETS_FILE || resolve(homedir(), '.config/zsh/secrets.zsh')
   const fileEnv = parseShellEnv(secretsPath)
-  // process.env takes priority so `DEMO_BEDROCK_KEY=... npm run demo` overrides.
-  const lookup = (name) => process.env[name] || fileEnv[name] || null
+  // Resolution per key name:
+  //   DEMO_*  -> process.env only — the explicit `DEMO_BEDROCK_KEY=… npm run demo` override.
+  //   raw     -> the secrets FILE first, then process.env as a fallback.
+  // The file wins for raw names on purpose: a shell that exported an old key
+  // before you edited the file would otherwise shadow the fresh file value
+  // (an inherited, stale env var is exactly how a rotated key kept 401-ing).
+  const lookup = (name) =>
+    (name.startsWith('DEMO_') ? process.env[name] : (fileEnv[name] || process.env[name])) || null
 
   const presets = []
   for (const def of PRESET_DEFS) {
