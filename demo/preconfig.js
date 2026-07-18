@@ -22,12 +22,14 @@ export function seedFromShell() {
   const keyStore = new KeyStore(adapter)
 
   for (const p of PRESETS) {
-    const existing = store.getConfig(p.id)
-    // On a repeat load keep whatever the user tweaked (model, effort, thinking)
-    // but always refresh credentials so a rotated shell key takes effect.
-    const config = existing
-      ? { ...existing, apiKey: p.config.apiKey, baseUrl: p.config.baseUrl }
-      : { ...createDefaultConfig(p.config.provider), ...p.config, name: p.label }
+    // Seed once. If a config for this id already exists, leave it alone —
+    // whatever key/model you set in the Configure modal wins and survives
+    // reloads. (Previously this clobbered your key from the shell on every
+    // load, which reverted a hand-entered key back to a stale shell one.)
+    // To re-pull from the shell, delete the provider in the modal and reload.
+    if (store.getConfig(p.id)) continue
+
+    const config = { ...createDefaultConfig(p.config.provider), ...p.config, name: p.label }
     store.saveConfig(p.id, config)
     // Mirror into the key store so the Configure modal's key reuse works too.
     keyStore.set(p.config.provider, p.config.apiKey, { providerType: p.config.provider })
