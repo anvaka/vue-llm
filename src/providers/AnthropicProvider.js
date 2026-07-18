@@ -68,10 +68,17 @@ export class AnthropicProvider extends BaseProvider {
   // Claude-5 generation removed the old `budget_tokens` knob; `output_config.effort`
   // is the current control, and it also caps overall token spend.) Bedrock Mantle
   // Claude inherits this via MantleClaudeProvider.
+  //
+  // `display: 'summarized'` is REQUIRED to get readable thinking text back:
+  // Opus 4.7+ / Claude-5 default `thinking.display` to 'omitted', which returns
+  // an empty thinking block with only an encrypted signature (Opus 4.6 defaulted
+  // to 'summarized'). Without this, extended thinking is invisible even though it
+  // runs and is billed. ('full' needs special Anthropic access; 'summarized' is
+  // the generally-available readable mode.)
   applyReasoningParams(request, options = {}) {
     const level = this.reasoningEffortFor(request, options)
     if (!level) return request
-    request.thinking = { type: 'adaptive' }
+    request.thinking = { type: 'adaptive', display: 'summarized' }
     request.output_config = { ...(request.output_config || {}), effort: level }
     return request
   }

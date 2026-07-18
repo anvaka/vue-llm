@@ -37,23 +37,16 @@ const effortLevels = computed(() =>
 )
 const supportsEffort = computed(() => effortLevels.value.length > 0)
 
-// Explain an empty Thinking panel after a Run that requested thinking. Some
-// providers stream the reasoning text (DeepSeek reasoner, native Anthropic);
-// AWS Bedrock never does — it encrypts the thinking block and returns only a
-// token count; and adaptive thinking may simply decline to think on an easy
-// prompt.
+// Explain an empty Thinking panel after a Run that requested thinking. With
+// display:'summarized' the Claude/Bedrock path now returns readable thinking
+// text, so an empty panel means the model spent no reasoning tokens (adaptive
+// thinking skipped it) or the provider genuinely returned none.
 const thinkingNote = computed(() => {
   if (!ranWithThinking.value || thinking.value) return ''
-  const provider = activeConfig.value?.provider
   const rt = metrics.value?.usage?.reasoningTokens
-  if (provider === 'bedrock') {
-    const spent = rt > 0 ? `${rt} reasoning tokens were spent` : (rt === 0 ? 'no reasoning tokens were spent on this prompt' : 'reasoning ran')
-    return `AWS Bedrock never returns reasoning text — it encrypts the thinking block and reports only a count (${spent}). ` +
-           `To read the reasoning itself, switch to a DeepSeek reasoner or native Anthropic provider.`
-  }
-  if (rt > 0) return `${rt} reasoning tokens were spent, but this provider didn't return the reasoning text.`
+  if (rt > 0) return `${rt} reasoning tokens were spent but no reasoning text came back for this request.`
   if (rt === 0) return 'Adaptive thinking chose not to think on this prompt — try a harder question or higher effort.'
-  return 'No reasoning text was returned for this request.'
+  return 'No reasoning was returned for this request.'
 })
 
 async function syncActive() {

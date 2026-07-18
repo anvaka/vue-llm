@@ -66,9 +66,11 @@ console.log('provider request bodies')
 const claude = await make(AnthropicProvider, { provider: 'anthropic', model: 'claude-opus-4-8', apiKey: 'x', baseUrl: 'https://example.invalid' })
 let req = claude.prepareRequest(MSGS, { model: 'claude-opus-4-8', enableThinking: true, reasoningEffort: 'xhigh', maxTokens: 100 })
 assert.deepEqual(req.output_config, { effort: 'xhigh' })
-assert.deepEqual(req.thinking, { type: 'adaptive' })
+// display:'summarized' is required for readable thinking text — Opus 4.7+ /
+// Claude-5 default it to 'omitted' (empty block + signature only).
+assert.deepEqual(req.thinking, { type: 'adaptive', display: 'summarized' })
 assert.ok(!('temperature' in req), 'Claude-5 drops temperature')
-ok('Anthropic thinking+xhigh => output_config.effort + adaptive thinking')
+ok('Anthropic thinking+xhigh => output_config.effort + adaptive thinking (display: summarized)')
 
 req = claude.prepareRequest(MSGS, { model: 'claude-opus-4-8', enableThinking: false, reasoningEffort: 'xhigh', maxTokens: 100 })
 assert.ok(!('output_config' in req) && !('thinking' in req), 'no effort when thinking off')
