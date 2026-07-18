@@ -850,6 +850,14 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* Width includes padding + border so full-width controls (inputs, the effort
+   track) never spill past their grid cell and force a horizontal scrollbar. */
+.llm-modal *,
+.llm-modal *::before,
+.llm-modal *::after {
+  box-sizing: border-box;
+}
+
 /* Modal overlay */
 .llm-modal-overlay {
   position: fixed;
