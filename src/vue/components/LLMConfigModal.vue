@@ -92,7 +92,7 @@
                     </button>
                   </div>
                   <small class="llm-security-note">
-                    ⚠️ API key is stored locally in your browser
+                    API key is stored locally in your browser
                     <span v-if="config.provider === 'custom'"> (optional for custom providers)</span>
                   </small>
                 </div>

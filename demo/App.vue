@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useLLM, ProviderSelector, LLMConfigModal } from '@lib/vue/index.js'
 import { effortLevelsFor } from '@lib/providers/reasoningPolicy.js'
-import { shellLabels } from './preconfig.js'
+import { shellLabels, reseedFromShell } from './preconfig.js'
 
 const { client, getActiveConfig } = useLLM()
 
@@ -54,6 +54,17 @@ async function syncActive() {
   }
 }
 onMounted(syncActive)
+
+const reseedMsg = ref('')
+// Overwrite the shell-seeded providers back to current shell values (fresh
+// keys), then re-init the active provider — no reload needed.
+async function reseed() {
+  reseedFromShell()
+  try { await client.refresh() } catch { /* not configured */ }
+  await syncActive()
+  reseedMsg.value = 'Reseeded from shell'
+  setTimeout(() => { reseedMsg.value = '' }, 2500)
+}
 
 // The reasoning field is spelled differently per provider — capture whichever
 // one the request actually carried so you can SEE effort land on the wire.
@@ -147,8 +158,12 @@ function fmtNum(n) { return (n == null) ? '—' : n }
     </header>
 
     <p v-if="shellLoaded.length" class="shell-note">
-      Auto-loaded from your shell: <b>{{ shellLoaded.join(', ') }}</b>. Keys stay local (never committed) —
-      swap models or add more via “Configure providers”.
+      Auto-loaded from your shell: <b>{{ shellLoaded.join(', ') }}</b>. Keys stay local (never committed).
+      <button class="reseed-btn" type="button" @click="reseed"
+              title="Re-read keys from your shell and overwrite these providers (picks up a rotated key)">
+        Reseed from shell
+      </button>
+      <span v-if="reseedMsg" class="reseed-ok">{{ reseedMsg }}</span>
     </p>
 
     <section class="bar">
@@ -264,6 +279,9 @@ function fmtNum(n) { return (n == null) ? '—' : n }
 .sub { margin: 4px 0 0; color: var(--llm-text-dim, #9aa0a6); font-size: 0.85rem; }
 .sub code { background: rgba(255,255,255,0.08); padding: 1px 5px; border-radius: 4px; }
 .shell-note { margin: 12px 0 0; padding: 8px 12px; font-size: 0.8rem; color: #cdd3da; background: rgba(126,226,184,0.08); border: 1px solid rgba(126,226,184,0.25); border-radius: 8px; }
+.reseed-btn { margin-left: 8px; padding: 3px 10px; font: inherit; font-size: 0.76rem; color: #cdd3da; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; cursor: pointer; }
+.reseed-btn:hover { background: rgba(255,255,255,0.13); border-color: rgba(255,255,255,0.32); }
+.reseed-ok { margin-left: 8px; font-size: 0.76rem; color: #7ee2b8; }
 .bar { display: flex; gap: 10px; align-items: center; margin: 18px 0 12px; flex-wrap: wrap; }
 .active { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
 .pill { font-size: 0.72rem; padding: 3px 9px; border-radius: 999px; background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1); }

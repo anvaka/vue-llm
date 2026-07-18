@@ -14,29 +14,39 @@ export const shellLabels = PRESETS.map(p => p.label)
 // Must match the plugin's namespace in demo/main.js (LLMPlugin { namespace: 'llm' }).
 const NAMESPACE = 'llm'
 
+function openStores() {
+  const adapter = new LocalStorageAdapter(NAMESPACE)
+  return { store: new ConfigStore({ storageAdapter: adapter }), keyStore: new KeyStore(adapter) }
+}
+
+// Write a preset into storage as a fresh config (config + mirrored key).
+function writePreset(store, keyStore, p) {
+  const config = { ...createDefaultConfig(p.config.provider), ...p.config, name: p.label }
+  store.saveConfig(p.id, config)
+  keyStore.set(p.config.provider, p.config.apiKey, { providerType: p.config.provider })
+}
+
+// Boot seed: create shell providers that don't exist yet, and never clobber an
+// existing entry — your Configure-modal edits survive reloads. (Previously this
+// overwrote the key from the shell on every load, reverting a hand-entered key.)
 export function seedFromShell() {
   if (!PRESETS.length) return []
-
-  const adapter = new LocalStorageAdapter(NAMESPACE)
-  const store = new ConfigStore({ storageAdapter: adapter })
-  const keyStore = new KeyStore(adapter)
-
+  const { store, keyStore } = openStores()
   for (const p of PRESETS) {
-    // Seed once. If a config for this id already exists, leave it alone —
-    // whatever key/model you set in the Configure modal wins and survives
-    // reloads. (Previously this clobbered your key from the shell on every
-    // load, which reverted a hand-entered key back to a stale shell one.)
-    // To re-pull from the shell, delete the provider in the modal and reload.
     if (store.getConfig(p.id)) continue
-
-    const config = { ...createDefaultConfig(p.config.provider), ...p.config, name: p.label }
-    store.saveConfig(p.id, config)
-    // Mirror into the key store so the Configure modal's key reuse works too.
-    keyStore.set(p.config.provider, p.config.apiKey, { providerType: p.config.provider })
+    writePreset(store, keyStore, p)
   }
-
-  // Activate the first pre-loaded provider if the user hasn't chosen one.
   if (!store.getActiveProviderId()) store.setActiveProviderId(PRESETS[0].id)
+  return PRESETS.map(p => p.label)
+}
 
+// Explicit reseed (the "Reseed from shell" button): overwrite every shell
+// provider back to its current shell values, so a rotated key is picked up
+// without deleting the provider by hand.
+export function reseedFromShell() {
+  if (!PRESETS.length) return []
+  const { store, keyStore } = openStores()
+  for (const p of PRESETS) writePreset(store, keyStore, p)
+  if (!store.getActiveProviderId()) store.setActiveProviderId(PRESETS[0].id)
   return PRESETS.map(p => p.label)
 }
