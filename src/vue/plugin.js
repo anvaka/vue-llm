@@ -24,7 +24,10 @@ export const LLMPlugin = {
     app.provide(LLM_CONFIG_SYMBOL, configStore)
     app.provide(LLM_KEYSTORE_SYMBOL, keyStore)
     if (options.autoInit) {
-      try { client.ensureInitialized() } catch { /* swallow until user configures */ }
+      // ensureInitialized() is async; a missing config rejects the promise.
+      // Swallow it here so "LLM not configured" doesn't surface as an
+      // uncaught rejection before the user has set anything up.
+      Promise.resolve(client.ensureInitialized()).catch(() => { /* not configured yet */ })
     }
   }
 }

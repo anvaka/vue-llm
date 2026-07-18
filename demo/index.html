@@ -1,9 +1,22 @@
 <!doctype html>
-<html lang="en">
+<!-- The playground UI is built for a dark surface (panels use translucent
+     white overlays); pin the theme dark so it renders the same regardless of
+     the OS light/dark preference. -->
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>vue-llm · reasoning effort playground</title>
+    <!-- Inline SVG favicon so the browser stops 404-ing on /favicon.ico. -->
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E" />
+    <style>
+      html, body { margin: 0; min-height: 100%; }
+      body {
+        background: var(--llm-bg, #181a1f);
+        color: var(--llm-text, #e6e8ea);
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+    </style>
   </head>
   <body>
     <div id="app"></div>

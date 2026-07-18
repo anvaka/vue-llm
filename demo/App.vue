@@ -2,8 +2,12 @@
 import { ref, computed, onMounted } from 'vue'
 import { useLLM, ProviderSelector, LLMConfigModal } from '@lib/vue/index.js'
 import { effortLevelsFor } from '@lib/providers/reasoningPolicy.js'
+import { shellLabels } from './preconfig.js'
 
 const { client, getActiveConfig } = useLLM()
+
+// Labels of providers seeded from the shell at dev time (see demo/preconfig.js).
+const shellLoaded = shellLabels
 
 const showConfig = ref(false)
 const activeConfig = ref(null)
@@ -142,6 +146,11 @@ function fmtNum(n) { return (n == null) ? '—' : n }
       </div>
     </header>
 
+    <p v-if="shellLoaded.length" class="shell-note">
+      Auto-loaded from your shell: <b>{{ shellLoaded.join(', ') }}</b>. Keys stay local (never committed) —
+      swap models or add more via “Configure providers”.
+    </p>
+
     <section class="bar">
       <ProviderSelector @changed="syncActive" @open-config="showConfig = true" />
       <button class="llm-btn llm-btn--secondary" @click="showConfig = true">Configure providers</button>
@@ -254,6 +263,7 @@ function fmtNum(n) { return (n == null) ? '—' : n }
 .head h1 { font-size: 1.3rem; margin: 0; }
 .sub { margin: 4px 0 0; color: var(--llm-text-dim, #9aa0a6); font-size: 0.85rem; }
 .sub code { background: rgba(255,255,255,0.08); padding: 1px 5px; border-radius: 4px; }
+.shell-note { margin: 12px 0 0; padding: 8px 12px; font-size: 0.8rem; color: #cdd3da; background: rgba(126,226,184,0.08); border: 1px solid rgba(126,226,184,0.25); border-radius: 8px; }
 .bar { display: flex; gap: 10px; align-items: center; margin: 18px 0 12px; flex-wrap: wrap; }
 .active { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
 .pill { font-size: 0.72rem; padding: 3px 9px; border-radius: 999px; background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1); }
