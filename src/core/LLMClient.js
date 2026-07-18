@@ -129,9 +129,14 @@ export class LLMClient {
     const validated = this.validateCapabilities({ ...payload, stream: true, model: payload.model || this.config.model, requestId: this.generateRequestId() })
     const messages = payload.messages
     let fullContent = ''
+    let fullThinking = ''
     let lastUsage = null
     await this.provider.streamRequest(messages, validated, (chunk) => {
       fullContent = chunk.fullContent
+      // Carry the reasoning text through to the result too — the per-chunk
+      // callback already sees chunk.fullThinking, but callers that only await
+      // the returned promise (e.g. the sweep) would otherwise lose it.
+      if (chunk.fullThinking) fullThinking = chunk.fullThinking
       if (chunk.fullUsage) lastUsage = chunk.fullUsage
       // Annotate each chunk with running cost when rates are known. Consumers
       // can ignore it (cost is null when no rates table entry matches) or
@@ -141,7 +146,7 @@ export class LLMClient {
         : chunk
       onChunk && onChunk(enriched)
     })
-    return { content: fullContent, usage: lastUsage, cost: this.costFor(lastUsage, { provider: this.config.provider, model: validated.model }) }
+    return { content: fullContent, thinking: fullThinking, usage: lastUsage, cost: this.costFor(lastUsage, { provider: this.config.provider, model: validated.model }) }
   }
 
   // Multi-turn tool-calling loop. Each iteration:

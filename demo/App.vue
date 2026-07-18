@@ -13,10 +13,14 @@ const showConfig = ref(false)
 const activeConfig = ref(null)
 const capabilities = ref([])
 
+// A genuinely hard prompt so adaptive thinking actually engages — trivial
+// prompts (e.g. the bat-and-ball) are answered without thinking, leaving the
+// Thinking panel empty and making it look like reasoning is missing.
 const prompt = ref(
-  'A bat and a ball cost $1.10 in total. The bat costs $1.00 more than the ball. ' +
-  'How much does the ball cost? Show your reasoning, then give two other puzzles ' +
-  'people get wrong the same way and explain the trap in each.'
+  'You have 12 identical-looking coins; exactly one is counterfeit and differs in ' +
+  'weight (you do NOT know whether it is heavier or lighter). Using a balance scale ' +
+  'only 3 times, give a complete decision procedure that always identifies the fake ' +
+  'coin AND whether it is heavy or light. Enumerate every weighing and branch.'
 )
 const enableThinking = ref(false)
 const effort = ref('medium')
