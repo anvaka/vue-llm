@@ -111,7 +111,9 @@ async function run() {
       payload(effort.value, enableThinking.value),
       (c) => { answer.value = c.fullContent || ''; thinking.value = c.fullThinking || '' }
     ))
-    metrics.value = { latencyMs: Math.round(performance.now() - t0), usage: res.usage, cost: res.cost }
+    // client cost is a breakdown object { total, input, output, ... } (or null
+    // when the model has no pricing entry) — display the total.
+    metrics.value = { latencyMs: Math.round(performance.now() - t0), usage: res.usage, cost: res.cost?.total ?? null }
   } catch (e) {
     errorMsg.value = e?.message || String(e)
   } finally {
@@ -134,7 +136,7 @@ async function sweep() {
         output: res.usage?.outputTokens ?? null,
         reasoning: res.usage?.reasoningTokens ?? null,
         total: res.usage?.totalTokens ?? null,
-        cost: res.cost ?? null,
+        cost: res.cost?.total ?? null,
         ok: true
       }]
     } catch (e) {
@@ -266,7 +268,11 @@ function fmtNum(n) { return (n == null) ? '—' : n }
           </tr>
         </tbody>
       </table>
-      <p class="hint">Higher effort should trend toward more output/reasoning tokens, latency, and cost.</p>
+      <p class="hint">
+        Higher effort should trend toward more output tokens, latency, and cost — until output hits the Max tokens cap
+        (raise it to see the spread). Claude counts thinking inside output tokens, so “reasoning tok” stays blank for it;
+        it only fills in for providers that report a separate count (gpt-5, o-series, DeepSeek reasoner).
+      </p>
     </section>
 
     <LLMConfigModal :is-visible="showConfig" @close="showConfig = false" @config-changed="syncActive" />

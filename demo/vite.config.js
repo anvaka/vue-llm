@@ -74,7 +74,10 @@ function buildPreconfig() {
     presets.push({
       id: def.id,
       label: def.label,
-      config: { ...def.config, apiKey, enableThinking: true, reasoningEffort: 'medium' }
+      // Roomy maxTokens so higher effort has space to spend more thinking
+      // tokens before hitting the cap — otherwise the sweep plateaus and effort
+      // levels look identical.
+      config: { ...def.config, apiKey, enableThinking: true, reasoningEffort: 'medium', maxTokens: 8000 }
     })
   }
   return presets
