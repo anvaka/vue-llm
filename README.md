@@ -207,6 +207,46 @@ import { calculateCost, formatCost, registerPricing, DEFAULT_RATES } from '@anva
 formatCost(0.00012) // "$0.000120"
 ```
 
+## Reasoning effort
+
+Reasoning models expose a graded **effort** control — how hard the model thinks before answering. It's a sub-setting of thinking: it only takes effect when `enableThinking` is on, and it's clamped to whatever levels the chosen model actually supports.
+
+```js
+const { content, thinking, usage } = await client.stream({
+  messages: [{ role: 'user', content: 'Prove n^5 - n is divisible by 30.' }],
+  enableThinking: true,      // required — effort does nothing without it
+  reasoningEffort: 'high'    // 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+})
+
+thinking // the model's reasoning text, when the provider returns it (see below)
+usage.reasoningTokens // reasoning-token count, when reported
+```
+
+You can also set `reasoningEffort` on a provider config (via `LLMConfigModal` or `saveConfig`) as the default for every request; a per-call value overrides it.
+
+**Supported levels are a property of the model** (see `src/providers/reasoningPolicy.js`), and the request carries the level whichever transport reaches the model — native, Bedrock (`anthropic.claude-*`), or an OpenRouter proxy id (`anthropic/claude-*`):
+
+| Model family | Levels |
+| --- | --- |
+| Claude Opus 4.7+, Sonnet/Opus/Fable 5 | `low` · `medium` · `high` · `xhigh` · `max` |
+| Claude Opus 4.6 | `low` · `medium` · `high` · `max` |
+| OpenAI `gpt-5` | `minimal` · `low` · `medium` · `high` |
+| OpenAI o-series | `low` · `medium` · `high` |
+| everything else | none (control hidden) |
+
+A requested level outside a model's range is snapped to the nearest supported one (`max` → `high` on gpt-5, etc.). `supportsReasoningEffort(model)` / `effortLevelsFor(model)` are exported from `@anvaka/vue-llm/providers` to drive UI.
+
+Each transport spells effort in its own wire field (handled for you): OpenAI Chat `reasoning_effort`, OpenAI Responses `reasoning.effort`, OpenRouter `reasoning: { enabled, effort }`, Anthropic/Bedrock `output_config: { effort }` alongside `thinking: { type: 'adaptive' }`.
+
+### Seeing the reasoning text (Claude / Bedrock)
+
+Claude only returns **readable** thinking text when the request asks for it via `thinking.display: 'summarized'` — which this library sends automatically. On Opus 4.7+ the display defaults to `omitted`, which returns an empty thinking block with only an encrypted `signature` (Opus 4.6 defaulted to `summarized`). If you build requests by hand, remember to set it or the reasoning will be invisible even though it ran and was billed.
+
+Two more things worth knowing:
+
+- **Adaptive thinking may skip thinking** on easy prompts (0 reasoning tokens, empty `thinking`) even at high effort — the model decides. Use a genuinely hard prompt to see it engage.
+- **DeepSeek reasoner** returns reasoning text too (mapped from `reasoning_content`). Grok/Gemini/OpenAI reasoning models report token counts but not always text.
+
 ## Theming
 Override any `--llm-*` CSS variable globally or per container.
 ```css
