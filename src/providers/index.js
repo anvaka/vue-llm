@@ -15,3 +15,6 @@ export { supportsVision } from './visionPolicy.js'
 export {
   parseImageUrl, normalizeImagePart, contentText, hasImageContent, messagesHaveImages
 } from './imageContent.js'
+export {
+  fitImageParts, shrinkImageDataUrl, encodedBytes, hasOversizedImages
+} from './imageFit.js'

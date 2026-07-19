@@ -240,6 +240,9 @@ export class BedrockMantleProvider extends BaseProvider {
     this.capabilities = this._active().capabilities
   }
   hasCapability(cap) { return this._active().hasCapability(cap) }
+  // Follows the routed transport: Claude enforces 5 MB, the OpenAI-compatible
+  // surfaces don't publish a per-image cap.
+  get maxImageBytes() { return this._active().maxImageBytes }
 
   // Defer real preparation to makeRequest/streamRequest so we can fall back
   // across API surfaces (a model's supported API isn't advertised anywhere).

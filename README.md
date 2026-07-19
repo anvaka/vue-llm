@@ -252,7 +252,30 @@ Remove the image parts from the conversation or switch to a vision-capable model
 
 Check first with `client.getCapabilities().includes('vision')`, or `supportsVision(modelId)` from `@anvaka/vue-llm/providers`. Vision support is a **model** property (`src/providers/visionPolicy.js`) and is deny-listed — a model is assumed to see unless it's a known text-only family — so newly released models work without a library update.
 
-Size limits are the provider's, and Anthropic's is easy to get wrong: **5 MB per image measured on the base64 string**, not the file. Base64 inflates by 4/3, so the effective file limit is ~3.75 MB and a 4.8 MB photo is rejected as `6755172 bytes > 5242880 bytes`. Gemini caps the whole request at 20 MB inline.
+### Oversized images are compressed, not rejected
+
+Providers cap image size, and Anthropic's cap is easy to get wrong: **5 MB per image measured on the base64 string**, not the file. Base64 inflates by 4/3, so the effective file limit is ~3.75 MB — a 4.8 MB photo is rejected as `6755172 bytes > 5242880 bytes`.
+
+Rather than fail, the client **re-encodes anything over the active provider's limit** before sending. A phone photo is routinely over the cap, and the request would otherwise always error when a re-encode would have worked. It tries JPEG at full resolution first (usually enough on its own — a screenshot PNG can be 10× its JPEG equivalent), then steps the dimensions down.
+
+This is automatic and needs no configuration. To observe or disable it:
+
+```js
+await client.stream({
+  messages,
+  onImageResize: ({ fromBytes, toBytes, width, height }) =>
+    console.log(`shrank ${fromBytes} → ${toBytes} (${width}×${height})`),
+  resizeImages: false   // send originals and let the provider decide
+})
+```
+
+`resizeImages: false` also works as a provider-config default. The limit comes from the provider (`provider.maxImageBytes`, in base64 bytes; `null` means no known cap), so Bedrock-Claude inherits Anthropic's 5 MB automatically.
+
+Compression is browser-only (canvas). Off-DOM — Node, SSR — messages pass through untouched. The pieces are exported for direct use:
+
+```js
+import { fitImageParts, shrinkImageDataUrl, encodedBytes, hasOversizedImages } from '@anvaka/vue-llm/providers'
+```
 
 ## Reasoning effort
 

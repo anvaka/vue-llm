@@ -17,6 +17,11 @@ export class GeminiProvider extends BaseProvider {
     if (atLeast(2, 0)) this.capabilities.add('thinking')
   }
 
+  // Gemini caps the WHOLE inline request (prompt + system + image bytes) at
+  // 20 MB; above that it wants the Files API. Applied per image, which is the
+  // conservative reading — a single part can't exceed the request budget.
+  get maxImageBytes() { return 20 * 1024 * 1024 }
+
   prepareRequest(messages, options) {
     const processed = this.processMessages(messages, options)
     const request = {

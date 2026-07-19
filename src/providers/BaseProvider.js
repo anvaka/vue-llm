@@ -23,6 +23,12 @@ export class BaseProvider {
     throw new Error('prepareRequest must be implemented by subclass')
   }
 
+  // Largest inline image this provider accepts, in BYTES OF BASE64 PAYLOAD (the
+  // unit providers actually measure — see imageFit.js). null means "no limit we
+  // know of", which leaves images untouched. LLMClient uses this to shrink
+  // over-cap images before sending instead of letting the request fail.
+  get maxImageBytes() { return null }
+
   // Normalize the canonical message list before a provider converts it to its
   // own wire format. Every prepareRequest calls this FIRST; the result is still
   // canonical (see imageContent.js), never provider-specific.

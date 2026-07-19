@@ -102,6 +102,11 @@ is spelled on the wire is a TRANSPORT property.**
 - `BaseProvider.processMessages` — every `prepareRequest` calls it FIRST. It folds
   the legacy `options.images` side channel into canonical parts and throws when a
   model that can't see is handed an image.
+- `src/providers/imageFit.js` — compression. `LLMClient.fitImages` runs before
+  every send and shrinks anything over `provider.maxImageBytes` (base64 bytes;
+  null = no known cap). Canvas-based, so it self-disables off-DOM. `prepareRequest`
+  is SYNCHRONOUS and canvas encoding is not, which is why fitting lives in the
+  async client rather than in the provider pipeline.
 
 ### Gotchas
 
@@ -119,8 +124,9 @@ is spelled on the wire is a TRANSPORT property.**
    file (verified live: `content.1.image.source.base64: image exceeds 5 MB
    maximum: 6755172 bytes > 5242880 bytes` for a 4.8 MB file). Base64 inflates by
    4/3, so the effective file limit is ~3.75 MB. Any size check must measure the
-   encoded length — the demo's first attempt compared `file.size` and let
-   everything between 3.75 MB and 5 MB through.
+   encoded length — the first attempt compared `file.size` and let everything
+   between 3.75 MB and 5 MB through. Over-cap images are COMPRESSED, not
+   rejected (`resizeImages: false` opts out).
 4. **Don't hardcode `image/jpeg`.** Every pre-rewrite implementation did, which
    mislabeled every PNG screenshot. The media type comes from the data URL.
 5. **Don't mutate the caller's messages.** The old `addImagesToMessages` methods

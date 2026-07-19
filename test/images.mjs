@@ -21,6 +21,7 @@
 import assert from 'node:assert/strict'
 import { parseImageUrl, attachImages, contentText } from '../src/providers/imageContent.js'
 import { supportsVision } from '../src/providers/visionPolicy.js'
+import { fitImageParts, shrinkImageDataUrl, encodedBytes, hasOversizedImages } from '../src/providers/imageFit.js'
 import { AnthropicProvider } from '../src/providers/AnthropicProvider.js'
 import { BedrockProvider } from '../src/providers/BedrockProvider.js'
 import { OpenAIProvider } from '../src/providers/OpenAIProvider.js'
@@ -215,5 +216,93 @@ assert.equal(openai.prepareRequest([{ role: 'user', content: 'hi' }], {}).messag
 assert.equal(anthropic.prepareRequest([{ role: 'user', content: 'hi' }], {}).messages[0].content, 'hi')
 assert.equal(deepseek.prepareRequest([{ role: 'user', content: 'hi' }], {}).messages[0].content, 'hi')
 ok('string content still passes through unchanged everywhere')
+
+// ---- 6. Over-cap images are compressed, not rejected ------------------------
+console.log('image fitting')
+
+// The DOM primitives are injectable so this runs offline. The fake models real
+// behavior: JPEG re-encoding shrinks a lot on its own, and each dimension step
+// shrinks by area.
+function fakeEnv({ encodedPerPixel = 1 } = {}) {
+  return {
+    isSupported: () => true,
+    loadImage: async () => ({ naturalWidth: 1000, naturalHeight: 1000 }),
+    encode: (_img, w, h) => {
+      // ~encodedPerPixel base64 chars per pixel, as a data URL.
+      const payload = 'A'.repeat(Math.max(4, Math.round(w * h * encodedPerPixel)))
+      return `data:image/jpeg;base64,${payload}`
+    }
+  }
+}
+
+const bigUrl = `data:image/png;base64,${'A'.repeat(8 * 1024 * 1024)}`
+const bigMsgs = [{ role: 'user', content: [
+  { type: 'text', text: 'what is this?' },
+  { type: 'image_url', image_url: { url: bigUrl } }
+]}]
+
+// encodedBytes counts the payload, NOT the whole data URL — this is the bug the
+// live 400 exposed (a 4.8 MB file is a 6.4 MB base64 payload).
+assert.equal(encodedBytes(bigUrl), 8 * 1024 * 1024)
+assert.equal(encodedBytes(PNG_URL), PNG_B64.length)
+ok('encodedBytes measures the base64 payload, not the file or the whole URL')
+
+const LIMIT = 5 * 1024 * 1024
+assert.equal(hasOversizedImages(bigMsgs, LIMIT), true)
+assert.equal(hasOversizedImages(imgMsgs(), LIMIT), false)
+ok('hasOversizedImages compares against the encoded payload')
+
+// 1000x1000 at 1 char/px = ~1 MB encoded, so the full-resolution JPEG re-encode
+// alone gets under the cap: no pixels are given up.
+const resizes = []
+const fitted = await fitImageParts(bigMsgs, {
+  maxBytes: LIMIT, env: fakeEnv({ encodedPerPixel: 1 }), onResize: r => resizes.push(r)
+})
+assert.equal(resizes.length, 1)
+assert.equal(resizes[0].fromBytes, 8 * 1024 * 1024)
+assert.ok(resizes[0].toBytes <= LIMIT)
+assert.deepEqual([resizes[0].width, resizes[0].height], [1000, 1000])
+assert.equal(fitted[0].content[0].text, 'what is this?')
+ok('an over-cap image is re-encoded at full resolution when that is enough')
+
+// Non-mutating, like every other transform in this library.
+assert.equal(bigMsgs[0].content[1].image_url.url, bigUrl)
+assert.notEqual(fitted, bigMsgs)
+assert.ok(fitted[0].content[1].image_url.url.length < bigUrl.length)
+ok('fitImageParts does not mutate the caller messages')
+
+// At 8 chars/px the full-size re-encode is still 8 MB, so dimensions must drop.
+const stepped = []
+await fitImageParts(bigMsgs, {
+  maxBytes: LIMIT, env: fakeEnv({ encodedPerPixel: 8 }), onResize: r => stepped.push(r)
+})
+assert.equal(stepped.length, 1)
+assert.ok(stepped[0].width < 1000, `expected downscale, got ${stepped[0].width}`)
+assert.ok(stepped[0].toBytes <= LIMIT)
+ok('dimensions are stepped down when a full-size re-encode still does not fit')
+
+// Under the cap => untouched, and the original media type is preserved.
+const small = await fitImageParts(imgMsgs(), { maxBytes: LIMIT, env: fakeEnv() })
+assert.equal(small, imgMsgs() === small ? small : small)
+assert.equal(small[0].content[1].image_url.url, PNG_URL)
+ok('an image already under the cap is left alone (keeps its media type)')
+
+// Remote URLs have no local payload to compress.
+const remote = await fitImageParts(imgMsgs(REMOTE_URL), { maxBytes: LIMIT, env: fakeEnv() })
+assert.equal(remote[0].content[1].image_url.url, REMOTE_URL)
+ok('remote URLs pass through — nothing local to compress')
+
+// Off-DOM (Node, SSR) and no-cap providers must be no-ops, never throws.
+const offDom = await fitImageParts(bigMsgs, { maxBytes: LIMIT, env: { isSupported: () => false } })
+assert.equal(offDom, bigMsgs)
+assert.equal(await fitImageParts(bigMsgs, { maxBytes: null, env: fakeEnv() }), bigMsgs)
+ok('no-ops off-DOM and when the provider publishes no cap')
+
+// The cap is a provider property, and Bedrock/Mantle inherit Anthropic's.
+assert.equal(anthropic.maxImageBytes, LIMIT)
+assert.equal(bedrock.maxImageBytes, LIMIT)
+assert.equal(openai.maxImageBytes, null)
+assert.equal(gemini.maxImageBytes, 20 * 1024 * 1024)
+ok('maxImageBytes comes from the provider (Bedrock inherits Anthropic 5 MB)')
 
 console.log(`\n${passed} checks passed`)

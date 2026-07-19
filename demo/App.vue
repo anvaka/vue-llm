@@ -4,6 +4,7 @@ import { useLLM, ProviderSelector, LLMConfigModal } from '@lib/vue/index.js'
 import { effortLevelsFor } from '@lib/providers/reasoningPolicy.js'
 import { shellLabels, reseedFromShell } from './preconfig.js'
 import { summarizeImages, fmtBytes } from './wireSummary.js'
+import { encodedBytes } from '@lib/providers/imageFit.js'
 
 const { client, getActiveConfig } = useLLM()
 
@@ -55,57 +56,17 @@ const attachments = ref([])   // { id, name, mime, url, bytes, note }
 const dragging = ref(false)
 let nextAttachmentId = 1
 
-// Anthropic caps an image at 5 MB and measures the BASE64 STRING, not the
-// decoded file — the 400 names the field it counted
-// (`content.1.image.source.base64: ... 6755172 bytes > 5242880 bytes`).
-// Base64 inflates by 4/3, so a 4.8 MB photo is a 6.4 MB payload: comparing
-// file.size against this cap lets everything between 3.75 MB and 5 MB through.
-// Always measure the encoded length.
-const IMAGE_LIMIT_BYTES = 5 * 1024 * 1024
+// The size cap and the compression both live in the library now (imageFit.js) —
+// the client shrinks over-cap images automatically using the ACTIVE provider's
+// `maxImageBytes`, so the demo neither hardcodes 5 MB nor re-implements canvas
+// resizing. It only reports what the library did.
+const imageLimit = ref(null)   // provider.maxImageBytes; null = no known cap
 
-// Bytes of base64 payload in a data URL — the number providers actually count.
-function encodedBytes(dataUrl) {
-  if (typeof dataUrl !== 'string') return 0
-  const comma = dataUrl.indexOf(',')
-  return comma === -1 ? 0 : dataUrl.length - comma - 1
-}
-
-const oversized = computed(() => attachments.value.filter(a => a.bytes > IMAGE_LIMIT_BYTES))
-const resized = computed(() => attachments.value.filter(a => a.note))
-
-function loadImage(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => resolve(img)
-    img.onerror = () => reject(new Error('Could not decode image'))
-    img.src = src
-  })
-}
-
-// Scale an over-cap image down until its base64 payload fits. Re-encodes as
-// JPEG because that alone usually wins more than the resize does (a screenshot
-// PNG can be 10x its JPEG equivalent). Returns null if it can't get under.
-async function shrinkToLimit(dataUrl, limitBytes) {
-  const img = await loadImage(dataUrl)
-  let scale = 1
-  for (let attempt = 0; attempt < 8; attempt++) {
-    // First pass re-encodes at full size; later passes also shrink dimensions.
-    if (attempt > 0) scale *= 0.75
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale))
-    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale))
-    const ctx = canvas.getContext('2d')
-    // JPEG has no alpha; fill white so transparent areas don't come out black.
-    ctx.fillStyle = '#fff'
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-    const out = canvas.toDataURL('image/jpeg', 0.85)
-    if (encodedBytes(out) <= limitBytes) {
-      return { url: out, mime: 'image/jpeg', width: canvas.width, height: canvas.height }
-    }
-  }
-  return null
-}
+const oversized = computed(() =>
+  imageLimit.value ? attachments.value.filter(a => a.bytes > imageLimit.value) : []
+)
+// Resizes reported by the library during the last Run.
+const resizeReport = ref([])
 
 function readAsDataURL(file) {
   return new Promise((resolve, reject) => {
@@ -123,20 +84,9 @@ async function addFiles(fileList) {
   for (const file of files) {
     if (!file.type.startsWith('image/')) { rejected.push(file.name); continue }
     try {
-      let url = await readAsDataURL(file)
-      let mime = file.type
-      let note = null
-      const encoded = encodedBytes(url)
-      if (encoded > IMAGE_LIMIT_BYTES) {
-        const shrunk = await shrinkToLimit(url, IMAGE_LIMIT_BYTES)
-        if (shrunk) {
-          note = `resized from ${fmtBytes(encoded)} → ${shrunk.width}×${shrunk.height} jpeg`
-          url = shrunk.url
-          mime = shrunk.mime
-        }
-      }
+      const url = await readAsDataURL(file)
       attachments.value = [...attachments.value, {
-        id: nextAttachmentId++, name: file.name, mime, url, bytes: encodedBytes(url), note
+        id: nextAttachmentId++, name: file.name, mime: file.type, url, bytes: encodedBytes(url)
       }]
     } catch (e) {
       rejected.push(file.name)
@@ -174,6 +124,8 @@ async function syncActive() {
   try { await client.ensureInitialized() } catch { /* not configured yet */ }
   activeConfig.value = getActiveConfig()
   capabilities.value = client.getCapabilities?.() || []
+  // Published by the provider (null = no cap it knows of).
+  imageLimit.value = client.provider?.maxImageBytes ?? null
   const c = activeConfig.value
   if (c) {
     enableThinking.value = !!c.enableThinking
@@ -243,7 +195,10 @@ function payload(effortLevel, thinkingOn) {
     enableThinking: thinkingOn,
     reasoningEffort: effortLevel,
     maxTokens: Number(maxTokens.value),
-    temperature: Number(temperature.value)
+    temperature: Number(temperature.value),
+    // The client shrinks anything over the active provider's cap; this just
+    // reports what it did.
+    onImageResize: (info) => { resizeReport.value = [...resizeReport.value, info] }
   }
 }
 
@@ -254,6 +209,7 @@ const ranWithThinking = ref(false)
 async function run() {
   if (!activeConfig.value) { errorMsg.value = 'Pick and configure a provider first.'; return }
   errorMsg.value = ''; answer.value = ''; thinking.value = ''; metrics.value = null; wire.value = null
+  resizeReport.value = []
   ranWithThinking.value = enableThinking.value
   busy.value = true
   const t0 = performance.now()
@@ -362,8 +318,8 @@ function fmtNum(n) { return (n == null) ? '—' : n }
             <figure v-for="a in attachments" :key="a.id" class="thumb">
               <img :src="a.url" :alt="a.name" />
               <button class="thumb-x" type="button" :title="`Remove ${a.name}`" @click="removeAttachment(a.id)">×</button>
-              <figcaption :title="a.note || 'base64 payload size — the number providers measure'">
-                {{ a.mime.replace('image/', '') }} · {{ fmtBytes(a.bytes) }}<span v-if="a.note"> ·&nbsp;resized</span>
+              <figcaption title="base64 payload size — the number providers measure">
+                {{ a.mime.replace('image/', '') }} · {{ fmtBytes(a.bytes) }}
               </figcaption>
             </figure>
           </div>
@@ -376,13 +332,14 @@ function fmtNum(n) { return (n == null) ? '—' : n }
             This model has no <b>vision</b> capability — the request will be rejected before it is sent
             (better than paying for an answer about an image the model never saw). Pick a vision-capable model.
           </p>
-          <p v-else-if="oversized.length" class="images-warn">
-            {{ oversized.map(a => a.name).join(', ') }} still exceeds the 5 MB cap after resizing and will be rejected.
-            Claude measures the <b>base64</b> payload, which is ~4/3 of the file size.
+          <p v-else-if="oversized.length" class="images-note">
+            {{ oversized.map(a => a.name).join(', ') }} exceeds this provider's {{ fmtBytes(imageLimit) }} cap
+            and will be <b>compressed automatically</b> before sending. The cap applies to the base64 payload
+            (~4/3 of the file size), so sizes here are the encoded ones.
           </p>
-          <p v-else-if="resized.length" class="images-note">
-            {{ resized.map(a => `${a.name}: ${a.note}`).join(' · ') }} — over the 5 MB cap, which Claude applies to the
-            base64 payload (~4/3 of the file size).
+          <p v-if="resizeReport.length" class="images-note">
+            Last run resized:
+            {{ resizeReport.map(r => `${fmtBytes(r.fromBytes)} → ${fmtBytes(r.toBytes)} (${r.width}×${r.height} jpeg)`).join(' · ') }}
           </p>
         </div>
 

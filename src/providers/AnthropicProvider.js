@@ -99,6 +99,13 @@ export class AnthropicProvider extends BaseProvider {
   // Bedrock subclasses override this to 'inline'.
   imageSourceMode() { return 'any' }
 
+  // 5 MB per image, measured on the base64 string rather than the decoded file
+  // — verified live: a 4.8 MB photo is rejected as
+  // "image exceeds 5 MB maximum: 6755172 bytes > 5242880 bytes". Base64 inflates
+  // by 4/3, so the effective FILE limit is ~3.75 MB. Inherited by Bedrock and
+  // Mantle-Claude, which enforce the same cap.
+  get maxImageBytes() { return 5 * 1024 * 1024 }
+
   processResponse(response) {
     const finishReason = mapFinishReason(response.stop_reason)
     const blocks = response.content || []
