@@ -15,6 +15,7 @@ results
 reports
 .nyc_output
 .vscode
+.claude
 
 npm-debug.log
 node_modules
