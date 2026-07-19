@@ -9,6 +9,7 @@ Browser-only LLM client + Vue 3 plugin, provider adapters, and lightweight compo
 - Streaming + promise requests via `llmClient.stream()`
 - Normalized usage + USD cost on every response (override built-in rates per app or per model)
 - Automatic prompt caching for Claude (Anthropic + Bedrock) — caches the system+tools prefix, plus the rolling conversation in agent loops; opt out with `promptCache: false`
+- Image input on every vision-capable provider from one message format, with over-cap images compressed automatically to the provider's limit
 - Vue plugin for dependency injection
 - `useLLM()` composable with reactive streaming state
 - Ready-to-use components: `ProviderSelector`, `LLMConfigModal`, `StoredKeysManager`
@@ -239,7 +240,7 @@ Images may appear on **any** user message, not just the last one, so multi-turn 
 | Bedrock Responses API | `input_image` | data / `s3://` only |
 | DeepSeek | — | no vision model exists |
 
-The media type is carried from your data URL, so PNG stays PNG.
+The media type is carried from your data URL, so a PNG stays a PNG — unless it has to be compressed to fit the provider's cap, which re-encodes it as JPEG (see below).
 
 ### Capability gating
 
@@ -263,13 +264,14 @@ This is automatic and needs no configuration. To observe or disable it:
 ```js
 await client.stream({
   messages,
-  onImageResize: ({ fromBytes, toBytes, width, height }) =>
+  onImageResize: ({ fromBytes, toBytes, width, height, mime }) =>
     console.log(`shrank ${fromBytes} → ${toBytes} (${width}×${height})`),
+  imageQuality: 0.85,   // JPEG quality for the re-encode (default 0.85)
   resizeImages: false   // send originals and let the provider decide
 })
 ```
 
-`resizeImages: false` also works as a provider-config default. The limit comes from the provider (`provider.maxImageBytes`, in base64 bytes; `null` means no known cap), so Bedrock-Claude inherits Anthropic's 5 MB automatically.
+`resizeImages` and `imageQuality` also work as provider-config defaults. Text-heavy screenshots are the case to watch: a lower-resolution JPEG can cost the model detail it would have read from the original, so raise `imageQuality` (or set `resizeImages: false` and shrink deliberately) if OCR accuracy matters more than bytes. The limit comes from the provider (`provider.maxImageBytes`, in base64 bytes; `null` means no known cap), so Bedrock-Claude inherits Anthropic's 5 MB automatically.
 
 Compression is browser-only (canvas). Off-DOM — Node, SSR — messages pass through untouched. The pieces are exported for direct use:
 
@@ -344,7 +346,19 @@ import {
   createProvider,      // (type, config) => Provider
   registerProvider,    // (type, ProviderClass) => void
   createProviderFlexible, // (type, config) => Provider (includes custom-registered)
-  supportsVision       // (modelId) => boolean — can this model accept images?
+
+  // Reasoning effort (model-side policy)
+  effortLevelsFor,     // (modelId) => string[] | null
+  supportsReasoningEffort, resolveEffort, clampEffort, DEFAULT_EFFORT,
+
+  // Images
+  supportsVision,      // (modelId) => boolean — can this model accept images?
+  parseImageUrl,       // (url) => { kind:'data', mime, b64 } | { kind:'remote', url }
+  normalizeImagePart, contentText, hasImageContent, messagesHaveImages,
+  fitImageParts,       // (messages, {maxBytes, onResize}) => Promise<messages>
+  shrinkImageDataUrl,  // (dataUrl, maxBytes) => Promise<{url, mime, width, height} | null>
+  encodedBytes,        // (dataUrl) => base64 payload size — what providers measure
+  hasOversizedImages   // (messages, maxBytes) => boolean
 } from '@anvaka/vue-llm/providers'
 
 // Helper for creating config objects

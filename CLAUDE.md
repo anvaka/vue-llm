@@ -1,8 +1,8 @@
 # CLAUDE.md
 
 Orientation for agents working on `@anvaka/vue-llm`. Covers the reasoning/thinking
-subsystem in depth (it has non-obvious traps); for the rest, read `README.md` and
-the code.
+and image subsystems in depth (both have non-obvious traps); for the rest, read
+`README.md` and the code.
 
 ## What this is
 
@@ -141,7 +141,9 @@ is spelled on the wire is a TRANSPORT property.**
    can generate does so on a separate endpoint with a non-text response, which
    nothing in `processResponse`/`streamRequest` is shaped for.
 
-`npm run test:images` covers all of the above offline.
+`npm run test:images` covers the wire formats, the base64 size accounting, the
+compression fallbacks and the capability gating offline (gotcha 7 is a design
+decision, not a testable behavior).
 
 ## The demo
 
