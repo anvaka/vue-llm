@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useLLM, ProviderSelector, LLMConfigModal } from '@lib/vue/index.js'
 import { effortLevelsFor } from '@lib/providers/reasoningPolicy.js'
 import { shellLabels, reseedFromShell } from './preconfig.js'
+import { summarizeImages, fmtBytes } from './wireSummary.js'
 
 const { client, getActiveConfig } = useLLM()
 
@@ -16,12 +17,16 @@ const capabilities = ref([])
 // A genuinely hard prompt so adaptive thinking actually engages — trivial
 // prompts (e.g. the bat-and-ball) are answered without thinking, leaving the
 // Thinking panel empty and making it look like reasoning is missing.
-const prompt = ref(
+const DEFAULT_PROMPT =
   'You have 12 identical-looking coins; exactly one is counterfeit and differs in ' +
   'weight (you do NOT know whether it is heavier or lighter). Using a balance scale ' +
   'only 3 times, give a complete decision procedure that always identifies the fake ' +
   'coin AND whether it is heavy or light. Enumerate every weighing and branch.'
-)
+// Swapped in on the first attachment, but only while the prompt is still the
+// untouched default — asking a coin-weighing riddle about a screenshot makes the
+// image path look broken when it is working fine.
+const VISION_PROMPT = 'Describe this image in detail. What text, objects and colors do you see?'
+const prompt = ref(DEFAULT_PROMPT)
 const enableThinking = ref(false)
 const effort = ref('medium')
 const maxTokens = ref(2000)
@@ -40,6 +45,60 @@ const effortLevels = computed(() =>
   activeConfig.value ? (effortLevelsFor(activeConfig.value.model) || []) : []
 )
 const supportsEffort = computed(() => effortLevels.value.length > 0)
+const supportsVision = computed(() => capabilities.value.includes('vision'))
+
+// ---- Image attachments ------------------------------------------------------
+// A browser file input yields a `data:` URL, which is exactly what the library's
+// canonical image part wants — each provider's converter decides whether to pass
+// it through whole or split it into base64 + media type.
+const attachments = ref([])   // { id, name, mime, url, bytes }
+const dragging = ref(false)
+let nextAttachmentId = 1
+
+// AWS caps images at 5 MB (the native Anthropic API allows 10 MB), so warn at
+// the tighter bound rather than letting the provider 400 after the upload.
+const IMAGE_WARN_BYTES = 5 * 1024 * 1024
+
+const oversized = computed(() => attachments.value.filter(a => a.bytes > IMAGE_WARN_BYTES))
+
+function readAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = () => reject(reader.error || new Error(`Could not read ${file.name}`))
+    reader.readAsDataURL(file)
+  })
+}
+
+async function addFiles(fileList) {
+  const files = Array.from(fileList || [])
+  if (!files.length) return
+  const rejected = []
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) { rejected.push(file.name); continue }
+    try {
+      const url = await readAsDataURL(file)
+      attachments.value = [...attachments.value, {
+        id: nextAttachmentId++, name: file.name, mime: file.type, url, bytes: file.size
+      }]
+    } catch (e) {
+      rejected.push(file.name)
+    }
+  }
+  if (rejected.length) errorMsg.value = `Skipped (not a readable image): ${rejected.join(', ')}`
+  if (attachments.value.length && prompt.value === DEFAULT_PROMPT) prompt.value = VISION_PROMPT
+}
+
+function removeAttachment(id) { attachments.value = attachments.value.filter(a => a.id !== id) }
+function clearAttachments() { attachments.value = [] }
+
+function onPickFiles(e) { addFiles(e.target.files); e.target.value = '' }
+function onDrop(e) { dragging.value = false; addFiles(e.dataTransfer?.files) }
+function onPaste(e) {
+  const files = e.clipboardData?.files
+  if (files?.length) { e.preventDefault(); addFiles(files) }
+}
+
 
 // Explain an empty Thinking panel after a Run that requested thinking. With
 // display:'summarized' the Claude/Bedrock path now returns readable thinking
@@ -91,8 +150,11 @@ function pickWire(body) {
   if (body.output_config !== undefined) out.output_config = body.output_config
   if (body.thinking !== undefined) out.thinking = body.thinking
   if (body.temperature !== undefined) out.temperature = body.temperature
+  const images = summarizeImages(body)
+  if (images.length) out.images = images
   return out
 }
+
 async function withWireCapture(fn) {
   const real = window.fetch
   let captured = null
@@ -104,7 +166,18 @@ async function withWireCapture(fn) {
   finally { window.fetch = real; wire.value = captured }
 }
 
-function messages() { return [{ role: 'user', content: prompt.value }] }
+// With no attachments, content stays a plain string — the canonical part array
+// is only used when it earns its keep.
+function messages() {
+  if (!attachments.value.length) return [{ role: 'user', content: prompt.value }]
+  return [{
+    role: 'user',
+    content: [
+      { type: 'text', text: prompt.value },
+      ...attachments.value.map(a => ({ type: 'image_url', image_url: { url: a.url } }))
+    ]
+  }]
+}
 
 function payload(effortLevel, thinkingOn) {
   return {
@@ -175,8 +248,8 @@ function fmtNum(n) { return (n == null) ? '—' : n }
   <div class="wrap">
     <header class="head">
       <div>
-        <h1>vue-llm · reasoning effort playground</h1>
-        <p class="sub">Test the <code>reasoningEffort</code> config across providers. Keys stay in your browser.</p>
+        <h1>vue-llm · provider playground</h1>
+        <p class="sub">Test <code>reasoningEffort</code> and image input across providers. Keys stay in your browser.</p>
       </div>
     </header>
 
@@ -199,6 +272,7 @@ function fmtNum(n) { return (n == null) ? '—' : n }
       <span class="pill pill--muted">{{ activeConfig.model || 'no model' }}</span>
       <span class="pill" :class="capabilities.includes('thinking') ? 'pill--on' : 'pill--off'">thinking</span>
       <span class="pill" :class="capabilities.includes('tools') ? 'pill--on' : 'pill--off'">tools</span>
+      <span class="pill" :class="supportsVision ? 'pill--on' : 'pill--off'">vision</span>
       <span v-if="supportsEffort" class="pill pill--info">effort: {{ effortLevels.join(' · ') }}</span>
       <span v-else class="pill pill--off">no effort control</span>
     </section>
@@ -209,7 +283,45 @@ function fmtNum(n) { return (n == null) ? '—' : n }
     <section class="grid">
       <div class="panel">
         <label class="lbl">Prompt</label>
-        <textarea v-model="prompt" rows="5" class="ta"></textarea>
+        <textarea v-model="prompt" rows="5" class="ta" @paste="onPaste"></textarea>
+
+        <div class="images"
+             :class="{ 'images--drag': dragging }"
+             @dragover.prevent="dragging = true"
+             @dragleave.prevent="dragging = false"
+             @drop.prevent="onDrop">
+          <div class="images-head">
+            <label class="lbl">Images</label>
+            <div class="images-actions">
+              <label class="file-btn">
+                Add image…
+                <input type="file" accept="image/*" multiple hidden @change="onPickFiles" />
+              </label>
+              <button v-if="attachments.length" class="file-btn" type="button" @click="clearAttachments">Clear</button>
+            </div>
+          </div>
+
+          <div v-if="attachments.length" class="thumbs">
+            <figure v-for="a in attachments" :key="a.id" class="thumb">
+              <img :src="a.url" :alt="a.name" />
+              <button class="thumb-x" type="button" :title="`Remove ${a.name}`" @click="removeAttachment(a.id)">×</button>
+              <figcaption>{{ a.mime.replace('image/', '') }} · {{ fmtBytes(a.bytes) }}</figcaption>
+            </figure>
+          </div>
+          <p v-else class="images-empty">
+            Drop an image here, paste one into the prompt, or use “Add image…”. Sent as a
+            <code>data:</code> URL — each provider converts it to its own wire shape.
+          </p>
+
+          <p v-if="attachments.length && !supportsVision" class="images-warn">
+            This model has no <b>vision</b> capability — the request will be rejected before it is sent
+            (better than paying for an answer about an image the model never saw). Pick a vision-capable model.
+          </p>
+          <p v-else-if="oversized.length" class="images-warn">
+            {{ oversized.map(a => a.name).join(', ') }} exceeds 5 MB — fine on the native Anthropic API (10 MB cap),
+            but Claude via AWS Bedrock will reject it.
+          </p>
+        </div>
 
         <div class="controls">
           <label class="chk">
@@ -245,8 +357,13 @@ function fmtNum(n) { return (n == null) ? '—' : n }
         <p v-if="errorMsg" class="err">{{ errorMsg }}</p>
 
         <div v-if="wire" class="wire">
-          <label class="lbl">Reasoning fields sent on the wire</label>
+          <label class="lbl">Reasoning + image fields sent on the wire</label>
           <pre>{{ JSON.stringify(wire, null, 2) }}</pre>
+          <p v-if="wire.images" class="hint">
+            Image payloads are shown by size, not inlined. Switch providers and re-run the same attachment to watch
+            the shape change: <code>image_url</code> (OpenAI-family) vs <code>source.base64</code> (Anthropic) vs
+            <code>inlineData</code> (Gemini) vs <code>message.images[]</code> (Ollama).
+          </p>
         </div>
       </div>
 
@@ -325,6 +442,22 @@ function fmtNum(n) { return (n == null) ? '—' : n }
 .panel { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 14px; margin-bottom: 16px; }
 .lbl { display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--llm-text-dim, #9aa0a6); margin-bottom: 6px; }
 .ta { width: 100%; box-sizing: border-box; background: var(--llm-input-bg, #12151a); color: inherit; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 10px; font: inherit; resize: vertical; }
+.images { margin-top: 12px; padding: 10px; border: 1px dashed rgba(255,255,255,0.16); border-radius: 8px; transition: border-color 0.15s, background 0.15s; }
+.images--drag { border-color: #8ab4ff; background: rgba(138,180,255,0.08); }
+.images-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.images-head .lbl { margin-bottom: 0; }
+.images-actions { display: flex; gap: 8px; }
+.file-btn { padding: 3px 10px; font: inherit; font-size: 0.76rem; color: #cdd3da; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; cursor: pointer; }
+.file-btn:hover { background: rgba(255,255,255,0.13); border-color: rgba(255,255,255,0.32); }
+.images-empty { margin: 8px 0 0; font-size: 0.76rem; color: var(--llm-text-dim, #9aa0a6); }
+.images-empty code { background: rgba(255,255,255,0.08); padding: 1px 4px; border-radius: 4px; }
+.images-warn { margin: 8px 0 0; font-size: 0.76rem; color: #ffcf8f; }
+.thumbs { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.thumb { position: relative; margin: 0; width: 84px; }
+.thumb img { width: 84px; height: 64px; object-fit: cover; border-radius: 6px; border: 1px solid rgba(255,255,255,0.14); display: block; }
+.thumb figcaption { margin-top: 3px; font-size: 0.64rem; color: var(--llm-text-dim, #9aa0a6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thumb-x { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; line-height: 1; padding: 0; font-size: 0.9rem; color: #e6e8ea; background: #333a44; border: 1px solid rgba(255,255,255,0.28); border-radius: 999px; cursor: pointer; }
+.thumb-x:hover { background: #4a525e; }
 .controls { display: flex; gap: 14px; align-items: end; flex-wrap: wrap; margin: 12px 0; }
 .chk { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; }
 .fld { display: flex; flex-direction: column; gap: 4px; font-size: 0.72rem; color: var(--llm-text-dim, #9aa0a6); }

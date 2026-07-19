@@ -1,6 +1,7 @@
 import { BaseProvider } from './BaseProvider.js'
 import { convertMessagesToOpenAI, normalizeOpenAIUsage } from './OpenAIProvider.js'
 import { supportsReasoningEffort } from './reasoningPolicy.js'
+import { supportsVision } from './visionPolicy.js'
 
 export class OpenRouterProvider extends BaseProvider {
   async detectCapabilities() {
@@ -10,12 +11,16 @@ export class OpenRouterProvider extends BaseProvider {
     // and gpt-5 ids; supportsReasoningEffort recognizes those model families so
     // their effort control is actually offered and sent.
     if (this.config.model.includes('o1') || this.config.model.includes('thinking') || this.config.model.includes('reasoning') || supportsReasoningEffort(this.config.model)) this.capabilities.add('thinking')
-    if (this.config.model.includes('vision') || this.config.model.includes('gpt-4') || this.config.model.includes('claude') || this.config.model.includes('gemini')) this.capabilities.add('vision')
+    // OpenRouter normalizes image parts to whatever the upstream model needs, so
+    // a data URL works even for Anthropic/Gemini backends. discoverModelsWithMetadata
+    // exposes the authoritative answer (architecture.input_modalities), but
+    // detection here is offline — so defer to the model-id policy.
+    if (supportsVision(this.config.model)) this.capabilities.add('vision')
   }
   prepareRequest(messages, options) {
     const request = {
       model: options.model || this.config.model,
-      messages: this.processMessages(messages, options),
+      messages: convertMessagesToOpenAI(this.processMessages(messages, options)),
       max_tokens: options.maxTokens || 1000,
       stream: options.stream || false
     }
@@ -45,18 +50,6 @@ export class OpenRouterProvider extends BaseProvider {
     return request
   }
 
-  processMessages(messages, options) {
-    const converted = convertMessagesToOpenAI(messages)
-    if (options.images && this.capabilities.has('vision')) return this.addImagesToMessages(converted, options.images)
-    return converted
-  }
-  addImagesToMessages(messages, images) {
-    const lastMessage = messages[messages.length - 1]
-    if (lastMessage && lastMessage.role === 'user') {
-      lastMessage.content = [ { type: 'text', text: lastMessage.content }, ...images.map(i => ({ type: 'image_url', image_url: { url: i } })) ]
-    }
-    return messages
-  }
   buildHeaders() {
     const headers = { 'Content-Type': 'application/json' }
     if (this.requiresAuth()) headers[this.getAuthHeaderName()] = this.getAuthHeaderValue()

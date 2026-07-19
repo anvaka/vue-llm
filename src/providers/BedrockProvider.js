@@ -19,6 +19,10 @@ export const BEDROCK_CLAUDE_MODELS = [
 ]
 
 export class BedrockProvider extends AnthropicProvider {
+  // As on Mantle, Claude via Bedrock takes base64 image sources only (and caps
+  // them at 5 MB rather than the native API's 10 MB).
+  imageSourceMode() { return 'inline' }
+
   prepareRequest(messages, options) {
     const request = super.prepareRequest(messages, options)
     // Bedrock InvokeModel expects the model in the URL path, not the body,

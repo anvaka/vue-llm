@@ -1,6 +1,6 @@
-# Reasoning-effort playground
+# Provider playground
 
-A local dev app for exercising the library against real providers — pick a model, toggle thinking, sweep effort levels, and watch tokens / cost / latency and the exact reasoning fields sent on the wire. It runs against the library **source** (`@lib` → `../src`), so edits to `src/` hot-reload here with no rebuild.
+A local dev app for exercising the library against real providers — pick a model, toggle thinking, sweep effort levels, attach images, and watch tokens / cost / latency plus the exact reasoning and image fields sent on the wire. It runs against the library **source** (`@lib` → `../src`), so edits to `src/` hot-reload here with no rebuild.
 
 ## Run it
 
@@ -10,6 +10,14 @@ npm run demo:build    # production build (no keys inlined — see below)
 ```
 
 Then open the app, keep **Enable thinking** on, pick an effort level, and hit **Run** — or **Sweep all effort levels** to compare spend across levels.
+
+## Images
+
+Drop an image on the **Images** box, paste one into the prompt, or use **Add image…**. It's read as a `data:` URL and sent as a canonical image content part; the **vision** pill shows whether the active model can accept it (attaching one to a text-only model fails before the request is sent).
+
+The wire panel summarizes the image payloads by size rather than inlining them. Re-run the same attachment against different providers to watch one part become `image_url` (OpenAI-family), `source.base64` (Anthropic), `inlineData` (Gemini) or `message.images[]` (Ollama).
+
+Note Claude **via AWS Bedrock** caps images at 5 MB (the native API allows 10 MB) and rejects remote URLs — the demo warns before you hit either.
 
 ## Providers & keys
 

@@ -11,3 +11,7 @@ export {
 export {
   effortLevelsFor, supportsReasoningEffort, resolveEffort, clampEffort, DEFAULT_EFFORT
 } from './reasoningPolicy.js'
+export { supportsVision } from './visionPolicy.js'
+export {
+  parseImageUrl, normalizeImagePart, contentText, hasImageContent, messagesHaveImages
+} from './imageContent.js'

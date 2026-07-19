@@ -1,18 +1,19 @@
 import { BaseProvider } from './BaseProvider.js'
 import { convertMessagesToOpenAI, normalizeOpenAIUsage } from './OpenAIProvider.js'
+import { supportsVision } from './visionPolicy.js'
 
 export class GrokProvider extends BaseProvider {
   async detectCapabilities() {
     if (!this.config.model) return
     const model = this.config.model.toLowerCase()
-    if (model.includes('grok-2') || model.includes('vision')) this.capabilities.add('vision')
+    if (supportsVision(model)) this.capabilities.add('vision')
     this.capabilities.add('tools')
   }
 
   prepareRequest(messages, options) {
     const request = {
       model: options.model || this.config.model || 'grok-beta',
-      messages: this.processMessages(messages, options),
+      messages: convertMessagesToOpenAI(this.processMessages(messages, options)),
       max_tokens: options.maxTokens || 1000,
       stream: options.stream || false
     }
@@ -23,22 +24,6 @@ export class GrokProvider extends BaseProvider {
       if (options.tool_choice) request.tool_choice = options.tool_choice
     }
     return request
-  }
-
-  processMessages(messages, options) {
-    const converted = convertMessagesToOpenAI(messages)
-    if (options.images && this.capabilities.has('vision')) return this.addImagesToMessages(converted, options.images)
-    return converted
-  }
-
-  addImagesToMessages(messages, images) {
-    const lastMessage = messages[messages.length - 1]
-    if (lastMessage && lastMessage.role === 'user') {
-      const content = [{ type: 'text', text: lastMessage.content }]
-      images.forEach(img => content.push({ type: 'image_url', image_url: { url: typeof img === 'string' ? img : img.url } }))
-      lastMessage.content = content
-    }
-    return messages
   }
 
   processResponse(response) {

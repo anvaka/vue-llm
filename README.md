@@ -207,6 +207,53 @@ import { calculateCost, formatCost, registerPricing, DEFAULT_RATES } from '@anva
 formatCost(0.00012) // "$0.000120"
 ```
 
+## Images (vision)
+
+Attach images by giving a message an **array of content parts** instead of a string. The parts are spelled the OpenAI way; the library converts them to each provider's own wire format.
+
+```js
+const { content } = await client.stream({
+  messages: [{
+    role: 'user',
+    content: [
+      { type: 'text', text: 'What is in this screenshot?' },
+      { type: 'image_url', image_url: { url: dataUrlFromFileInput } }
+    ]
+  }]
+})
+```
+
+`url` is either a base64 `data:` URL — what a browser `<input type="file">` + `FileReader.readAsDataURL()` gives you — or a remote `http(s)` URL. Plain string content still works exactly as before; you only reach for the array form when a message carries an image.
+
+Images may appear on **any** user message, not just the last one, so multi-turn conversations and `runAgentLoop` keep working with images in their history.
+
+### What each provider does with it
+
+| Provider | Wire shape | Remote URLs |
+| --- | --- | --- |
+| OpenAI, Grok, OpenRouter, llama.cpp, Custom | `image_url` — the canonical part, verbatim | yes |
+| Anthropic | `image.source.{media_type, data}` (base64) | yes (`source.type: 'url'`) |
+| Anthropic **via Bedrock** | base64 only | **no** — rejected up front |
+| Gemini | `inlineData.{mimeType, data}` | no — Files API URIs only |
+| Ollama | `images: ['<raw base64>']`, outside `content` | no |
+| Bedrock Responses API | `input_image` | data / `s3://` only |
+| DeepSeek | — | no vision model exists |
+
+The media type is carried from your data URL, so PNG stays PNG.
+
+### Capability gating
+
+Sending an image to a model that can't see it **throws before the request is made**, rather than silently dropping it and billing you for a confident answer about an image the model never received:
+
+```
+Model 'deepseek-chat' on provider 'deepseek' does not support image input.
+Remove the image parts from the conversation or switch to a vision-capable model.
+```
+
+Check first with `client.getCapabilities().includes('vision')`, or `supportsVision(modelId)` from `@anvaka/vue-llm/providers`. Vision support is a **model** property (`src/providers/visionPolicy.js`) and is deny-listed — a model is assumed to see unless it's a known text-only family — so newly released models work without a library update.
+
+Size limits are the provider's: Anthropic allows 10 MB per image natively but only **5 MB via Bedrock**; Gemini caps the whole request at 20 MB inline.
+
 ## Reasoning effort
 
 Reasoning models expose a graded **effort** control — how hard the model thinks before answering. It's a sub-setting of thinking: it only takes effect when `enableThinking` is on, and it's clamped to whatever levels the chosen model actually supports.
@@ -273,7 +320,8 @@ import {
   DEFAULT_CONFIGS,     // Default configs for each provider type
   createProvider,      // (type, config) => Provider
   registerProvider,    // (type, ProviderClass) => void
-  createProviderFlexible // (type, config) => Provider (includes custom-registered)
+  createProviderFlexible, // (type, config) => Provider (includes custom-registered)
+  supportsVision       // (modelId) => boolean — can this model accept images?
 } from '@anvaka/vue-llm/providers'
 
 // Helper for creating config objects

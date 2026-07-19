@@ -1,6 +1,7 @@
 // OpenAI provider implementation (extracted)
 import { BaseProvider } from './BaseProvider.js'
 import { isOpenAIReasoningModel } from './samplingPolicy.js'
+import { supportsVision } from './visionPolicy.js'
 
 export class OpenAIProvider extends BaseProvider {
   async detectCapabilities() {
@@ -9,7 +10,7 @@ export class OpenAIProvider extends BaseProvider {
     if (isOpenAIReasoningModel(id)) {
       this.capabilities.add('thinking')
     }
-    if (id.includes('gpt-4') && id.includes('vision')) {
+    if (supportsVision(id)) {
       this.capabilities.add('vision')
     }
     if (id.includes('gpt-4') || id.includes('gpt-3.5') || id.includes('gpt-5')) {
@@ -21,7 +22,7 @@ export class OpenAIProvider extends BaseProvider {
     const model = options.model || this.config.model || 'gpt-3.5-turbo'
     const request = {
       model,
-      messages: this.processMessages(messages, options),
+      messages: convertMessagesToOpenAI(this.processMessages(messages, options)),
       stream: options.stream || false
     }
     // OpenAI omits the usage block from streamed responses unless this flag
@@ -53,29 +54,6 @@ export class OpenAIProvider extends BaseProvider {
     // uses max_completion_tokens, and any model we detected as a thinking model
     // does too.
     return isOpenAIReasoningModel(id) || id.includes('gpt-5') || this.capabilities.has('thinking')
-  }
-
-  processMessages(messages, options) {
-    const converted = convertMessagesToOpenAI(messages)
-    if (options.images && this.capabilities.has('vision')) {
-      return this.addImagesToMessages(converted, options.images)
-    }
-    return converted
-  }
-
-  addImagesToMessages(messages, images) {
-    const lastMessage = messages[messages.length - 1]
-    if (lastMessage && lastMessage.role === 'user') {
-      const content = [ { type: 'text', text: lastMessage.content } ]
-      images.forEach(img => {
-        content.push({
-          type: 'image_url',
-          image_url: { url: typeof img === 'string' ? img : img.url }
-        })
-      })
-      lastMessage.content = content
-    }
-    return messages
   }
 
   processResponse(response) {
@@ -175,6 +153,11 @@ export function normalizeOpenAIUsage(raw) {
 // Canonical in-memory messages use { tool_calls: [{id, name, args}] } on the
 // assistant message. OpenAI's wire format wants { tool_calls: [{id, type, function:{name, arguments:string}}] }.
 // Tool messages are already in wire format.
+//
+// Multimodal content needs no conversion here at all: the canonical part array
+// (imageContent.js) IS the OpenAI Chat Completions spelling, data URLs included.
+// The same is true for Grok, OpenRouter, llama.cpp and the Custom provider,
+// which all reuse this converter.
 export function convertMessagesToOpenAI(messages) {
   return messages.map(m => {
     if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) {

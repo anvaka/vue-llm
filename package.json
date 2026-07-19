@@ -14,7 +14,8 @@
     "demo:build": "vite build --config demo/vite.config.js",
     "test:providers": "node test/providers.mjs",
     "test:caching": "node test/caching.mjs",
-    "test:reasoning": "node test/reasoning.mjs"
+    "test:reasoning": "node test/reasoning.mjs",
+    "test:images": "node test/images.mjs"
   },
   "exports": {
     ".": {
