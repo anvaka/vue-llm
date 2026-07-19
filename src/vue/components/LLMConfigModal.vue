@@ -92,7 +92,7 @@
                     </button>
                   </div>
                   <small class="llm-security-note">
-                    ⚠️ API key is stored locally in your browser
+                    API key is stored locally in your browser
                     <span v-if="config.provider === 'custom'"> (optional for custom providers)</span>
                   </small>
                 </div>
@@ -119,47 +119,70 @@
                 <div v-if="modelLoadError" class="llm-model-error">
                   {{ modelLoadError }}
                 </div>
-                
-                <div v-if="supportsThinking" class="llm-thinking-toggle">
+              </div>
+
+              <template v-if="supportsThinking">
+                <label class="llm-field-label">Reasoning:</label>
+                <div class="llm-reasoning-field">
                   <label class="llm-checkbox-label">
-                    <input 
-                      type="checkbox" 
-                      v-model="config.enableThinking"
-                      class="llm-checkbox"
+                    <input type="checkbox" v-model="config.enableThinking" class="llm-checkbox" />
+                    Enable thinking
+                  </label>
+
+                  <template v-if="config.enableThinking && effortLevels.length">
+                    <div class="llm-effort-seg" role="radiogroup" aria-label="Reasoning effort">
+                      <button
+                        v-for="lvl in effortLevels"
+                        :key="lvl"
+                        type="button"
+                        role="radio"
+                        :aria-checked="config.reasoningEffort === lvl"
+                        class="llm-effort-btn"
+                        :class="{ active: config.reasoningEffort === lvl }"
+                        @click="config.reasoningEffort = lvl"
+                      >{{ effortLabel(lvl) }}</button>
+                    </div>
+                    <small class="llm-field-note">
+                      Higher effort spends more reasoning tokens — deeper answers, slower.
+                    </small>
+                  </template>
+                </div>
+              </template>
+
+              <label class="llm-field-label">Sampling:</label>
+              <div class="llm-sampling-field">
+                <div class="llm-sampling-inputs">
+                  <label class="llm-inline-field">
+                    <span class="llm-inline-label">Temp</span>
+                    <input
+                      v-model.number="config.temperature"
+                      type="number"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      class="llm-form-control llm-num"
+                      :disabled="isFixedTemperature"
                     />
-                    Enable Thinking: Show model's reasoning process
+                  </label>
+                  <label class="llm-inline-field">
+                    <span class="llm-inline-label">Max tokens</span>
+                    <input
+                      v-model.number="config.maxTokens"
+                      type="number"
+                      min="1"
+                      max="100000"
+                      class="llm-form-control llm-num"
+                      ref="maxTokensInput"
+                    />
                   </label>
                 </div>
-              </div>
-
-              <label class="llm-field-label">Temperature:</label>
-              <div class="llm-temperature-field">
-                <input 
-                  v-model.number="config.temperature" 
-                  type="number" 
-                  min="0" 
-                  max="2" 
-                  step="0.1"
-                  class="llm-form-control"
-                  :disabled="isFixedTemperature"
-                />
-                <small v-if="!isFixedTemperature" class="llm-field-note">
-                  Controls randomness: 0 = deterministic, 2 = very creative
-                </small>
-                <small v-else class="llm-field-note">
+                <small v-if="isFixedTemperature" class="llm-field-note">
                   This model uses a fixed temperature of 1.
                 </small>
+                <small v-else class="llm-field-note">
+                  Temperature controls randomness — 0 = deterministic, 2 = very creative.
+                </small>
               </div>
-
-              <label class="llm-field-label">Max Tokens:</label>
-              <input
-                v-model.number="config.maxTokens"
-                type="number"
-                min="1"
-                max="100000"
-                class="llm-form-control"
-                ref="maxTokensInput"
-              />
             </template>
           </div>
           <div v-if="testResult" class="llm-test-result" :class="testResult.success ? 'llm-test-result--success' : 'llm-test-result--error'">
@@ -279,6 +302,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useLLM, createDefaultConfig } from '../useLLM.js'
 import { createProvider, DEFAULT_CONFIGS } from '../../providers/factory.js'
+import { effortLevelsFor } from '../../providers/reasoningPolicy.js'
 import StoredKeysManager from './StoredKeysManager.vue'
 
 const props = defineProps({
@@ -401,6 +425,12 @@ const modelCapabilities = ref(new Set())
 const supportsThinking = computed(() => {
   return config.value.model && modelCapabilities.value.has('thinking')
 })
+
+// Effort levels the selected model accepts (empty when it has no graded effort
+// control). Drives the Reasoning Effort selector, shown only when thinking is on.
+const effortLevels = computed(() => effortLevelsFor(config.value.model) || [])
+
+const effortLabel = (lvl) => lvl === 'xhigh' ? 'xHigh' : lvl.charAt(0).toUpperCase() + lvl.slice(1)
 
 // Fixed temperature for certain models
 const isFixedTemperature = computed(() => {
@@ -768,6 +798,19 @@ watch(() => config.value.temperature, (t) => {
   if (isFixedTemperature.value && t !== 1) config.value.temperature = 1
 })
 
+// Keep the chosen effort valid for the current model: when the model changes
+// (or an older saved config has no reasoningEffort), snap to the model's
+// default rather than leaving a level the model would reject.
+watch([effortLevels, () => config.value.enableThinking], () => {
+  const levels = effortLevels.value
+  if (!levels.length) return
+  if (!levels.includes(config.value.reasoningEffort)) {
+    config.value.reasoningEffort = levels.includes('medium')
+      ? 'medium'
+      : levels[Math.floor((levels.length - 1) / 2)]
+  }
+})
+
 // Stored Keys Manager
 const openStoredKeysManager = () => { showStoredKeysManager.value = true }
 const closeStoredKeysManager = () => { showStoredKeysManager.value = false }
@@ -807,6 +850,14 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* Width includes padding + border so full-width controls (inputs, the effort
+   track) never spill past their grid cell and force a horizontal scrollbar. */
+.llm-modal *,
+.llm-modal *::before,
+.llm-modal *::after {
+  box-sizing: border-box;
+}
+
 /* Modal overlay */
 .llm-modal-overlay {
   position: fixed;
@@ -1093,12 +1144,17 @@ onUnmounted(() => {
 .llm-form-grid {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 1rem;
-  align-items: center;
+  gap: 0.85rem 1rem;
+  /* Top-align so a label sits at the first line of a multi-control cell
+     instead of floating in the vertical middle of it. */
+  align-items: start;
 }
 
 .llm-field-label {
   margin-bottom: 0;
+  /* Matches a form control's top padding so label text lines up with the
+     input text on the same row. */
+  padding-top: 0.5rem;
   white-space: nowrap;
   color: var(--llm-text, #e6e8ea);
   font-size: var(--llm-font-size-sm, 0.85rem);
@@ -1191,16 +1247,87 @@ onUnmounted(() => {
   color: var(--llm-error, #ef4444);
 }
 
-.llm-thinking-toggle {
-  display: block;
-  width: 100%;
-  margin-top: 0.5rem;
-}
-
-/* Temperature field */
-.llm-temperature-field {
+/* Reasoning row: thinking toggle + effort spectrum. padding-top matches the
+   left label so the checkbox lines up with "Reasoning:". */
+.llm-reasoning-field {
   display: flex;
   flex-direction: column;
+  gap: 0.6rem;
+  padding-top: 0.5rem;
+}
+
+/* Effort as an ordered segmented track (Low → Max), spanning the field width
+   so the whole spectrum and the current stop are visible at a glance. */
+.llm-effort-seg {
+  display: flex;
+  width: 100%;
+  border: 1px solid var(--llm-border, #33383f);
+  border-radius: var(--llm-radius-sm, 4px);
+  overflow: hidden;
+}
+
+.llm-effort-btn {
+  flex: 1;
+  padding: 0.4rem 0.5rem;
+  border: none;
+  background: var(--llm-bg, #181a1f);
+  color: var(--llm-text-dim, #9aa0a6);
+  cursor: pointer;
+  font-size: var(--llm-font-size-sm, 0.85rem);
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.llm-effort-btn + .llm-effort-btn {
+  border-left: 1px solid var(--llm-border, #33383f);
+}
+
+.llm-effort-btn:hover:not(.active) {
+  background: var(--llm-bg-mute, #242830);
+  color: var(--llm-text, #e6e8ea);
+}
+
+.llm-effort-btn.active {
+  background: var(--llm-accent, #6366f1);
+  color: var(--llm-bg, #181a1f);
+  font-weight: 600;
+}
+
+/* Sampling row: temperature + max tokens side by side. */
+.llm-sampling-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.llm-sampling-inputs {
+  display: flex;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.llm-inline-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  cursor: text;
+}
+
+.llm-inline-label {
+  color: var(--llm-text-dim, #9aa0a6);
+  font-size: var(--llm-font-size-xs, 0.75rem);
+  white-space: nowrap;
+}
+
+.llm-num {
+  width: 6rem;
+}
+
+/* Inside gap-spaced groups the note's own top margin would double the gap. */
+.llm-reasoning-field .llm-field-note,
+.llm-sampling-field .llm-field-note {
+  margin-top: 0;
 }
 
 .llm-field-note {

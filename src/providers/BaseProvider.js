@@ -1,6 +1,7 @@
 // Base provider class for all LLM providers (browser-only)
 
 import { samplingModeFor, samplingKey, recordSamplingConstraint, classifyTemperatureError, SAMPLING_MODE } from './samplingPolicy.js'
+import { resolveEffort, DEFAULT_EFFORT } from './reasoningPolicy.js'
 
 export class BaseProvider {
   constructor(config) {
@@ -36,6 +37,31 @@ export class BaseProvider {
     const mode = samplingModeFor(this.#samplingKey(model), model)
     if (mode === SAMPLING_MODE.OMIT) delete request.temperature
     else request.temperature = mode === SAMPLING_MODE.ONE ? 1 : requested
+    return request
+  }
+
+  // Resolve the reasoning-effort level to send for this request, or null when
+  // none should be sent. Effort is a SUB-SETTING of thinking (it replaces the
+  // old hand-written `if (enableThinking) request.reasoning_effort = ...` gate):
+  // no thinking, no effort. When thinking is on, the requested level (per-call
+  // option, else the model's config, else the default) is clamped to what the
+  // model actually accepts — a model with no effort control returns null.
+  reasoningEffortFor(request, options = {}) {
+    if (!options.enableThinking) return null
+    const model = request.model || this.config?.model || ''
+    const requested = options.reasoningEffort ?? this.config?.reasoningEffort ?? DEFAULT_EFFORT
+    return resolveEffort(requested, model)
+  }
+
+  // Write the model's reasoning-effort field onto the request. This default is
+  // the OpenAI Chat Completions spelling (`reasoning_effort`, shared by the
+  // native OpenAI, OpenRouter, and Mantle-chat transports). Providers whose
+  // wire format spells effort differently override this: the Responses API uses
+  // `reasoning.effort`, the Anthropic Messages API uses `output_config.effort`.
+  // Returns `request`.
+  applyReasoningParams(request, options = {}) {
+    const level = this.reasoningEffortFor(request, options)
+    if (level) request.reasoning_effort = level
     return request
   }
 

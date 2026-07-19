@@ -1,11 +1,15 @@
 import { BaseProvider } from './BaseProvider.js'
 import { convertMessagesToOpenAI, normalizeOpenAIUsage } from './OpenAIProvider.js'
+import { supportsReasoningEffort } from './reasoningPolicy.js'
 
 export class OpenRouterProvider extends BaseProvider {
   async detectCapabilities() {
     if (!this.config.model) return
     this.capabilities.add('tools')
-    if (this.config.model.includes('o1') || this.config.model.includes('thinking') || this.config.model.includes('reasoning')) this.capabilities.add('thinking')
+    // The name-substring heuristics (o1/thinking/reasoning) miss proxied Claude
+    // and gpt-5 ids; supportsReasoningEffort recognizes those model families so
+    // their effort control is actually offered and sent.
+    if (this.config.model.includes('o1') || this.config.model.includes('thinking') || this.config.model.includes('reasoning') || supportsReasoningEffort(this.config.model)) this.capabilities.add('thinking')
     if (this.config.model.includes('vision') || this.config.model.includes('gpt-4') || this.config.model.includes('claude') || this.config.model.includes('gemini')) this.capabilities.add('vision')
   }
   prepareRequest(messages, options) {
@@ -18,8 +22,12 @@ export class OpenRouterProvider extends BaseProvider {
     this.applySamplingParams(request, options)
     if (request.stream) request.stream_options = { include_usage: true }
     if (options.enableThinking && this.capabilities.has('thinking')) {
-      request.reasoning = options.reasoning !== false
-      if (options.reasoningEffort) request.reasoning_effort = options.reasoningEffort
+      // OpenRouter's unified reasoning param is an object: `enabled` turns it on,
+      // `effort` (added by applyReasoningParams below, clamped to the underlying
+      // model's range) sets the depth. A model with no known effort control just
+      // keeps `{ enabled: true }` with no effort field.
+      request.reasoning = { enabled: options.reasoning !== false }
+      this.applyReasoningParams(request, options)
     }
     if (options.tools && this.capabilities.has('tools')) {
       request.tools = options.tools
@@ -27,6 +35,16 @@ export class OpenRouterProvider extends BaseProvider {
     }
     return request
   }
+  // OpenRouter nests effort inside the `reasoning` object rather than the
+  // top-level `reasoning_effort` field, so override the BaseProvider default.
+  applyReasoningParams(request, options = {}) {
+    const level = this.reasoningEffortFor(request, options)
+    if (!level) return request
+    const reasoning = (request.reasoning && typeof request.reasoning === 'object') ? request.reasoning : {}
+    request.reasoning = { ...reasoning, effort: level }
+    return request
+  }
+
   processMessages(messages, options) {
     const converted = convertMessagesToOpenAI(messages)
     if (options.images && this.capabilities.has('vision')) return this.addImagesToMessages(converted, options.images)

@@ -228,6 +228,10 @@ export function createDefaultConfig(provider) {
     temperature: 0.7,
     maxTokens: 4096,
     enableThinking: false,
+    // Reasoning depth for models that expose a graded effort control; only
+    // takes effect when enableThinking is on. Clamped to the model's supported
+    // range at request time (see reasoningPolicy.js).
+    reasoningEffort: 'medium',
     enabled: true,
     configuredAt: new Date().toISOString()
   }

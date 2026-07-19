@@ -75,6 +75,7 @@ export function createDefaultConfig(provider) {
     temperature: 0.7,
     maxTokens: 1000,
     enableThinking: false,
+    reasoningEffort: 'medium',
     enabled: true,
     configuredAt: new Date().toISOString()
   }

@@ -9,8 +9,11 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite build --watch",
+    "demo": "vite --config demo/vite.config.js",
+    "demo:build": "vite build --config demo/vite.config.js",
     "test:providers": "node test/providers.mjs",
-    "test:caching": "node test/caching.mjs"
+    "test:caching": "node test/caching.mjs",
+    "test:reasoning": "node test/reasoning.mjs"
   },
   "exports": {
     ".": {
@@ -37,8 +40,9 @@
     "vue": ">=3.3.0"
   },
   "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.0",
     "vite": "^6.0.0",
-    "@vitejs/plugin-vue": "^5.2.0"
+    "vue": "^3.5.40"
   },
   "files": [
     "dist",

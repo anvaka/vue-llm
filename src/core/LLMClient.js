@@ -91,9 +91,16 @@ export class LLMClient {
     const shouldEnableThinking = options.enableThinking !== undefined
       ? options.enableThinking
       : this.config?.enableThinking || false
+    // Effort mirrors enableThinking's resolution: a per-call value wins, else
+    // the active config's. Providers clamp it to the model and gate it behind
+    // thinking, so passing it through unconditionally is safe.
+    const resolvedEffort = options.reasoningEffort !== undefined
+      ? options.reasoningEffort
+      : this.config?.reasoningEffort
     return {
       ...options,
       enableThinking: shouldEnableThinking && this.provider.hasCapability('thinking'),
+      reasoningEffort: resolvedEffort,
       images: options.images && this.provider.hasCapability('vision') ? options.images : null,
       tools: options.tools && this.provider.hasCapability('tools') ? options.tools : null
     }
@@ -122,9 +129,14 @@ export class LLMClient {
     const validated = this.validateCapabilities({ ...payload, stream: true, model: payload.model || this.config.model, requestId: this.generateRequestId() })
     const messages = payload.messages
     let fullContent = ''
+    let fullThinking = ''
     let lastUsage = null
     await this.provider.streamRequest(messages, validated, (chunk) => {
       fullContent = chunk.fullContent
+      // Carry the reasoning text through to the result too — the per-chunk
+      // callback already sees chunk.fullThinking, but callers that only await
+      // the returned promise (e.g. the sweep) would otherwise lose it.
+      if (chunk.fullThinking) fullThinking = chunk.fullThinking
       if (chunk.fullUsage) lastUsage = chunk.fullUsage
       // Annotate each chunk with running cost when rates are known. Consumers
       // can ignore it (cost is null when no rates table entry matches) or
@@ -134,7 +146,7 @@ export class LLMClient {
         : chunk
       onChunk && onChunk(enriched)
     })
-    return { content: fullContent, usage: lastUsage, cost: this.costFor(lastUsage, { provider: this.config.provider, model: validated.model }) }
+    return { content: fullContent, thinking: fullThinking, usage: lastUsage, cost: this.costFor(lastUsage, { provider: this.config.provider, model: validated.model }) }
   }
 
   // Multi-turn tool-calling loop. Each iteration:
@@ -174,6 +186,7 @@ export class LLMClient {
     model,
     maxTokens,
     enableThinking,
+    reasoningEffort,
     signal
   } = {}) {
     await this.ensureInitialized()
@@ -200,6 +213,7 @@ export class LLMClient {
         temperature: temperature ?? this.config.temperature,
         maxTokens: maxTokens ?? this.config.maxTokens ?? 4096,
         enableThinking: enableThinking ?? false,
+        reasoningEffort,
         // Re-sends the whole growing conversation each turn, so cache the
         // rolling transcript prefix (Anthropic-family providers honor this).
         cacheTranscript: true,
@@ -374,6 +388,7 @@ class StreamablePromise {
       temperature: this.options.temperature ?? config.temperature,
       maxTokens: this.options.maxTokens ?? config.maxTokens,
       enableThinking: this.options.enableThinking,
+      reasoningEffort: this.options.reasoningEffort,
       requestId: this.client.generateRequestId(),
       ...(this.options.images ? { images: this.options.images } : {}),
       ...(this.options.tools ? { tools: this.options.tools } : {})

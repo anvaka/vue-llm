@@ -108,7 +108,18 @@ class MantleResponsesProvider extends BaseProvider {
     const tools = toolsToResponsesFormat(options.tools)
     if (tools) req.tools = tools
     // Reasoning models on this path reject a custom temperature, so we omit it.
+    // Reasoning effort per the model's policy (only when thinking is on).
+    this.applyReasoningParams(req, options)
     return req
+  }
+
+  // The Responses API expresses effort as a nested `reasoning: { effort }`
+  // object (unlike Chat Completions' top-level `reasoning_effort`), so override
+  // the BaseProvider default.
+  applyReasoningParams(request, options = {}) {
+    const level = this.reasoningEffortFor(request, options)
+    if (level) request.reasoning = { ...(request.reasoning || {}), effort: level }
+    return request
   }
 
   processResponse(response) {
