@@ -46,9 +46,13 @@ export const DEFAULT_RATES = {
   },
 
   anthropic: {
+    // Fable 5 / Mythos 5 (Project Glasswing) price above Opus tier: $10/$50 per 1M.
+    'claude-fable-5':    { input: 10.00, output: 50.00, cachedInput: 1.00, cacheCreation: 12.50 },
+    'claude-mythos-5':   { input: 10.00, output: 50.00, cachedInput: 1.00, cacheCreation: 12.50 },
     'claude-opus-4-8':   { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
     'claude-opus-4-7':   { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
     'claude-opus-4-6':   { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
+    'claude-sonnet-5':   { input: 3.00, output: 15.00, cachedInput: 0.30, cacheCreation: 3.75 },
     'claude-sonnet-4-6': { input: 3.00, output: 15.00, cachedInput: 0.30, cacheCreation: 3.75 },
     'claude-sonnet-4-5': { input: 3.00, output: 15.00, cachedInput: 0.30, cacheCreation: 3.75 },
     'claude-haiku-4-5':  { input: 1.00, output:  5.00, cachedInput: 0.10, cacheCreation: 1.25 }
@@ -61,13 +65,16 @@ export const DEFAULT_RATES = {
   // provider type ('bedrock'), so both id forms live here. Keys omit any -v1
   // suffix so lookupRates' prefix match catches versioned ids.
   bedrock: {
+    'us.anthropic.claude-fable-5':    { input: 10.00, output: 50.00, cachedInput: 1.00, cacheCreation: 12.50 },
     'us.anthropic.claude-opus-4-8':   { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
     'us.anthropic.claude-opus-4-7':   { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
     'us.anthropic.claude-opus-4-6':   { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
+    'us.anthropic.claude-sonnet-5':   { input: 3.00, output: 15.00, cachedInput: 0.30, cacheCreation: 3.75 },
     'us.anthropic.claude-sonnet-4-6': { input: 3.00, output: 15.00, cachedInput: 0.30, cacheCreation: 3.75 },
     'us.anthropic.claude-sonnet-4-5': { input: 3.00, output: 15.00, cachedInput: 0.30, cacheCreation: 3.75 },
     'us.anthropic.claude-haiku-4-5':  { input: 1.00, output:  5.00, cachedInput: 0.10, cacheCreation: 1.25 },
     // bedrock-mantle ids
+    'anthropic.claude-fable-5':       { input: 10.00, output: 50.00, cachedInput: 1.00, cacheCreation: 12.50 },
     'anthropic.claude-opus-4-8':      { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
     'anthropic.claude-opus-4-7':      { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
     'anthropic.claude-opus-4-6':      { input: 5.00, output: 25.00, cachedInput: 0.50, cacheCreation: 6.25 },
