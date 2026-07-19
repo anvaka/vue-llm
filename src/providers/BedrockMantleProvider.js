@@ -44,8 +44,8 @@ function friendlyError(e) {
 class MantleClaudeProvider extends AnthropicProvider {
   getApiPath() { return '/anthropic/v1/messages' }
   // Claude routed through AWS accepts base64 image sources ONLY — the native
-  // API's `url` and `file` sources are rejected here. (AWS also caps images at
-  // 5 MB rather than the native 10 MB.)
+  // API's `url` and `file` sources are rejected here. (The 5 MB per-image cap is
+  // measured on the base64 string, so the effective file limit is ~3.75 MB.)
   imageSourceMode() { return 'inline' }
   buildHeaders() {
     const h = super.buildHeaders()

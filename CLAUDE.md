@@ -112,9 +112,15 @@ is spelled on the wire is a TRANSPORT property.**
    URL. Ollama wants raw base64 in a sibling `images` array *outside* `content`.
    Never hand any of them the `data:` prefix.
 3. **Claude via Bedrock/Mantle accepts base64 sources ONLY** — the native API's
-   `source.type:'url'` and `'file'` are rejected there, and the per-image cap is
-   5 MB rather than 10 MB. That's what `imageSourceMode()` is for; `BedrockProvider`
-   and `MantleClaudeProvider` override it to `'inline'`.
+   `source.type:'url'` and `'file'` are rejected there. That's what
+   `imageSourceMode()` is for; `BedrockProvider` and `MantleClaudeProvider`
+   override it to `'inline'`.
+   **The 5 MB per-image cap is measured on the BASE64 STRING**, not the decoded
+   file (verified live: `content.1.image.source.base64: image exceeds 5 MB
+   maximum: 6755172 bytes > 5242880 bytes` for a 4.8 MB file). Base64 inflates by
+   4/3, so the effective file limit is ~3.75 MB. Any size check must measure the
+   encoded length — the demo's first attempt compared `file.size` and let
+   everything between 3.75 MB and 5 MB through.
 4. **Don't hardcode `image/jpeg`.** Every pre-rewrite implementation did, which
    mislabeled every PNG screenshot. The media type comes from the data URL.
 5. **Don't mutate the caller's messages.** The old `addImagesToMessages` methods

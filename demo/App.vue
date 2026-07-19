@@ -51,15 +51,61 @@ const supportsVision = computed(() => capabilities.value.includes('vision'))
 // A browser file input yields a `data:` URL, which is exactly what the library's
 // canonical image part wants — each provider's converter decides whether to pass
 // it through whole or split it into base64 + media type.
-const attachments = ref([])   // { id, name, mime, url, bytes }
+const attachments = ref([])   // { id, name, mime, url, bytes, note }
 const dragging = ref(false)
 let nextAttachmentId = 1
 
-// AWS caps images at 5 MB (the native Anthropic API allows 10 MB), so warn at
-// the tighter bound rather than letting the provider 400 after the upload.
-const IMAGE_WARN_BYTES = 5 * 1024 * 1024
+// Anthropic caps an image at 5 MB and measures the BASE64 STRING, not the
+// decoded file — the 400 names the field it counted
+// (`content.1.image.source.base64: ... 6755172 bytes > 5242880 bytes`).
+// Base64 inflates by 4/3, so a 4.8 MB photo is a 6.4 MB payload: comparing
+// file.size against this cap lets everything between 3.75 MB and 5 MB through.
+// Always measure the encoded length.
+const IMAGE_LIMIT_BYTES = 5 * 1024 * 1024
 
-const oversized = computed(() => attachments.value.filter(a => a.bytes > IMAGE_WARN_BYTES))
+// Bytes of base64 payload in a data URL — the number providers actually count.
+function encodedBytes(dataUrl) {
+  if (typeof dataUrl !== 'string') return 0
+  const comma = dataUrl.indexOf(',')
+  return comma === -1 ? 0 : dataUrl.length - comma - 1
+}
+
+const oversized = computed(() => attachments.value.filter(a => a.bytes > IMAGE_LIMIT_BYTES))
+const resized = computed(() => attachments.value.filter(a => a.note))
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('Could not decode image'))
+    img.src = src
+  })
+}
+
+// Scale an over-cap image down until its base64 payload fits. Re-encodes as
+// JPEG because that alone usually wins more than the resize does (a screenshot
+// PNG can be 10x its JPEG equivalent). Returns null if it can't get under.
+async function shrinkToLimit(dataUrl, limitBytes) {
+  const img = await loadImage(dataUrl)
+  let scale = 1
+  for (let attempt = 0; attempt < 8; attempt++) {
+    // First pass re-encodes at full size; later passes also shrink dimensions.
+    if (attempt > 0) scale *= 0.75
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale))
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale))
+    const ctx = canvas.getContext('2d')
+    // JPEG has no alpha; fill white so transparent areas don't come out black.
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    const out = canvas.toDataURL('image/jpeg', 0.85)
+    if (encodedBytes(out) <= limitBytes) {
+      return { url: out, mime: 'image/jpeg', width: canvas.width, height: canvas.height }
+    }
+  }
+  return null
+}
 
 function readAsDataURL(file) {
   return new Promise((resolve, reject) => {
@@ -77,9 +123,20 @@ async function addFiles(fileList) {
   for (const file of files) {
     if (!file.type.startsWith('image/')) { rejected.push(file.name); continue }
     try {
-      const url = await readAsDataURL(file)
+      let url = await readAsDataURL(file)
+      let mime = file.type
+      let note = null
+      const encoded = encodedBytes(url)
+      if (encoded > IMAGE_LIMIT_BYTES) {
+        const shrunk = await shrinkToLimit(url, IMAGE_LIMIT_BYTES)
+        if (shrunk) {
+          note = `resized from ${fmtBytes(encoded)} → ${shrunk.width}×${shrunk.height} jpeg`
+          url = shrunk.url
+          mime = shrunk.mime
+        }
+      }
       attachments.value = [...attachments.value, {
-        id: nextAttachmentId++, name: file.name, mime: file.type, url, bytes: file.size
+        id: nextAttachmentId++, name: file.name, mime, url, bytes: encodedBytes(url), note
       }]
     } catch (e) {
       rejected.push(file.name)
@@ -305,7 +362,9 @@ function fmtNum(n) { return (n == null) ? '—' : n }
             <figure v-for="a in attachments" :key="a.id" class="thumb">
               <img :src="a.url" :alt="a.name" />
               <button class="thumb-x" type="button" :title="`Remove ${a.name}`" @click="removeAttachment(a.id)">×</button>
-              <figcaption>{{ a.mime.replace('image/', '') }} · {{ fmtBytes(a.bytes) }}</figcaption>
+              <figcaption :title="a.note || 'base64 payload size — the number providers measure'">
+                {{ a.mime.replace('image/', '') }} · {{ fmtBytes(a.bytes) }}<span v-if="a.note"> ·&nbsp;resized</span>
+              </figcaption>
             </figure>
           </div>
           <p v-else class="images-empty">
@@ -318,8 +377,12 @@ function fmtNum(n) { return (n == null) ? '—' : n }
             (better than paying for an answer about an image the model never saw). Pick a vision-capable model.
           </p>
           <p v-else-if="oversized.length" class="images-warn">
-            {{ oversized.map(a => a.name).join(', ') }} exceeds 5 MB — fine on the native Anthropic API (10 MB cap),
-            but Claude via AWS Bedrock will reject it.
+            {{ oversized.map(a => a.name).join(', ') }} still exceeds the 5 MB cap after resizing and will be rejected.
+            Claude measures the <b>base64</b> payload, which is ~4/3 of the file size.
+          </p>
+          <p v-else-if="resized.length" class="images-note">
+            {{ resized.map(a => `${a.name}: ${a.note}`).join(' · ') }} — over the 5 MB cap, which Claude applies to the
+            base64 payload (~4/3 of the file size).
           </p>
         </div>
 
@@ -452,6 +515,7 @@ function fmtNum(n) { return (n == null) ? '—' : n }
 .images-empty { margin: 8px 0 0; font-size: 0.76rem; color: var(--llm-text-dim, #9aa0a6); }
 .images-empty code { background: rgba(255,255,255,0.08); padding: 1px 4px; border-radius: 4px; }
 .images-warn { margin: 8px 0 0; font-size: 0.76rem; color: #ffcf8f; }
+.images-note { margin: 8px 0 0; font-size: 0.76rem; color: #8ab4ff; }
 .thumbs { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
 .thumb { position: relative; margin: 0; width: 84px; }
 .thumb img { width: 84px; height: 64px; object-fit: cover; border-radius: 6px; border: 1px solid rgba(255,255,255,0.14); display: block; }

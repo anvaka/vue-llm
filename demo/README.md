@@ -17,7 +17,7 @@ Drop an image on the **Images** box, paste one into the prompt, or use **Add ima
 
 The wire panel summarizes the image payloads by size rather than inlining them. Re-run the same attachment against different providers to watch one part become `image_url` (OpenAI-family), `source.base64` (Anthropic), `inlineData` (Gemini) or `message.images[]` (Ollama).
 
-Note Claude **via AWS Bedrock** caps images at 5 MB (the native API allows 10 MB) and rejects remote URLs — the demo warns before you hit either.
+Claude caps an image at **5 MB measured on the base64 payload**, which is ~4/3 of the file size — so the effective file limit is ~3.75 MB. The demo measures the encoded size and automatically re-encodes anything over the cap (labelled "resized" on the thumbnail). Claude via AWS Bedrock additionally rejects remote image URLs.
 
 ## Providers & keys
 

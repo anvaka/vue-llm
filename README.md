@@ -252,7 +252,7 @@ Remove the image parts from the conversation or switch to a vision-capable model
 
 Check first with `client.getCapabilities().includes('vision')`, or `supportsVision(modelId)` from `@anvaka/vue-llm/providers`. Vision support is a **model** property (`src/providers/visionPolicy.js`) and is deny-listed — a model is assumed to see unless it's a known text-only family — so newly released models work without a library update.
 
-Size limits are the provider's: Anthropic allows 10 MB per image natively but only **5 MB via Bedrock**; Gemini caps the whole request at 20 MB inline.
+Size limits are the provider's, and Anthropic's is easy to get wrong: **5 MB per image measured on the base64 string**, not the file. Base64 inflates by 4/3, so the effective file limit is ~3.75 MB and a 4.8 MB photo is rejected as `6755172 bytes > 5242880 bytes`. Gemini caps the whole request at 20 MB inline.
 
 ## Reasoning effort
 
