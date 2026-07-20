@@ -10,9 +10,12 @@ export class DeepSeekProvider extends BaseProvider {
   }
 
   prepareRequest(messages, options) {
+    // DeepSeek has no vision model on its public API, so `vision` is never
+    // detected and processMessages rejects a conversation carrying images
+    // rather than quietly sending a prompt about an invisible picture.
     const request = {
       model: options.model || this.config.model || 'deepseek-chat',
-      messages: convertMessagesForDeepSeek(messages),
+      messages: convertMessagesForDeepSeek(this.processMessages(messages, options)),
       max_tokens: options.maxTokens || 1000,
       stream: options.stream || false
     }

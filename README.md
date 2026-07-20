@@ -9,6 +9,7 @@ Browser-only LLM client + Vue 3 plugin, provider adapters, and lightweight compo
 - Streaming + promise requests via `llmClient.stream()`
 - Normalized usage + USD cost on every response (override built-in rates per app or per model)
 - Automatic prompt caching for Claude (Anthropic + Bedrock) — caches the system+tools prefix, plus the rolling conversation in agent loops; opt out with `promptCache: false`
+- Image input on every vision-capable provider from one message format, with over-cap images compressed automatically to the provider's limit
 - Vue plugin for dependency injection
 - `useLLM()` composable with reactive streaming state
 - Ready-to-use components: `ProviderSelector`, `LLMConfigModal`, `StoredKeysManager`
@@ -207,6 +208,77 @@ import { calculateCost, formatCost, registerPricing, DEFAULT_RATES } from '@anva
 formatCost(0.00012) // "$0.000120"
 ```
 
+## Images (vision)
+
+Attach images by giving a message an **array of content parts** instead of a string. The parts are spelled the OpenAI way; the library converts them to each provider's own wire format.
+
+```js
+const { content } = await client.stream({
+  messages: [{
+    role: 'user',
+    content: [
+      { type: 'text', text: 'What is in this screenshot?' },
+      { type: 'image_url', image_url: { url: dataUrlFromFileInput } }
+    ]
+  }]
+})
+```
+
+`url` is either a base64 `data:` URL — what a browser `<input type="file">` + `FileReader.readAsDataURL()` gives you — or a remote `http(s)` URL. Plain string content still works exactly as before; you only reach for the array form when a message carries an image.
+
+Images may appear on **any** user message, not just the last one, so multi-turn conversations and `runAgentLoop` keep working with images in their history.
+
+### What each provider does with it
+
+| Provider | Wire shape | Remote URLs |
+| --- | --- | --- |
+| OpenAI, Grok, OpenRouter, llama.cpp, Custom | `image_url` — the canonical part, verbatim | yes |
+| Anthropic | `image.source.{media_type, data}` (base64) | yes (`source.type: 'url'`) |
+| Anthropic **via Bedrock** | base64 only | **no** — rejected up front |
+| Gemini | `inlineData.{mimeType, data}` | no — Files API URIs only |
+| Ollama | `images: ['<raw base64>']`, outside `content` | no |
+| Bedrock Responses API | `input_image` | data / `s3://` only |
+| DeepSeek | — | no vision model exists |
+
+The media type is carried from your data URL, so a PNG stays a PNG — unless it has to be compressed to fit the provider's cap, which re-encodes it as JPEG (see below).
+
+### Capability gating
+
+Sending an image to a model that can't see it **throws before the request is made**, rather than silently dropping it and billing you for a confident answer about an image the model never received:
+
+```
+Model 'deepseek-chat' on provider 'deepseek' does not support image input.
+Remove the image parts from the conversation or switch to a vision-capable model.
+```
+
+Check first with `client.getCapabilities().includes('vision')`, or `supportsVision(modelId)` from `@anvaka/vue-llm/providers`. Vision support is a **model** property (`src/providers/visionPolicy.js`) and is deny-listed — a model is assumed to see unless it's a known text-only family — so newly released models work without a library update.
+
+### Oversized images are compressed, not rejected
+
+Providers cap image size, and Anthropic's cap is easy to get wrong: **5 MB per image measured on the base64 string**, not the file. Base64 inflates by 4/3, so the effective file limit is ~3.75 MB — a 4.8 MB photo is rejected as `6755172 bytes > 5242880 bytes`.
+
+Rather than fail, the client **re-encodes anything over the active provider's limit** before sending. A phone photo is routinely over the cap, and the request would otherwise always error when a re-encode would have worked. It tries JPEG at full resolution first (usually enough on its own — a screenshot PNG can be 10× its JPEG equivalent), then steps the dimensions down.
+
+This is automatic and needs no configuration. To observe or disable it:
+
+```js
+await client.stream({
+  messages,
+  onImageResize: ({ fromBytes, toBytes, width, height, mime }) =>
+    console.log(`shrank ${fromBytes} → ${toBytes} (${width}×${height})`),
+  imageQuality: 0.85,   // JPEG quality for the re-encode (default 0.85)
+  resizeImages: false   // send originals and let the provider decide
+})
+```
+
+`resizeImages` and `imageQuality` also work as provider-config defaults. Text-heavy screenshots are the case to watch: a lower-resolution JPEG can cost the model detail it would have read from the original, so raise `imageQuality` (or set `resizeImages: false` and shrink deliberately) if OCR accuracy matters more than bytes. The limit comes from the provider (`provider.maxImageBytes`, in base64 bytes; `null` means no known cap), so Bedrock-Claude inherits Anthropic's 5 MB automatically.
+
+Compression is browser-only (canvas). Off-DOM — Node, SSR — messages pass through untouched. The pieces are exported for direct use:
+
+```js
+import { fitImageParts, shrinkImageDataUrl, encodedBytes, hasOversizedImages } from '@anvaka/vue-llm/providers'
+```
+
 ## Reasoning effort
 
 Reasoning models expose a graded **effort** control — how hard the model thinks before answering. It's a sub-setting of thinking: it only takes effect when `enableThinking` is on, and it's clamped to whatever levels the chosen model actually supports.
@@ -273,7 +345,20 @@ import {
   DEFAULT_CONFIGS,     // Default configs for each provider type
   createProvider,      // (type, config) => Provider
   registerProvider,    // (type, ProviderClass) => void
-  createProviderFlexible // (type, config) => Provider (includes custom-registered)
+  createProviderFlexible, // (type, config) => Provider (includes custom-registered)
+
+  // Reasoning effort (model-side policy)
+  effortLevelsFor,     // (modelId) => string[] | null
+  supportsReasoningEffort, resolveEffort, clampEffort, DEFAULT_EFFORT,
+
+  // Images
+  supportsVision,      // (modelId) => boolean — can this model accept images?
+  parseImageUrl,       // (url) => { kind:'data', mime, b64 } | { kind:'remote', url }
+  normalizeImagePart, contentText, hasImageContent, messagesHaveImages,
+  fitImageParts,       // (messages, {maxBytes, onResize}) => Promise<messages>
+  shrinkImageDataUrl,  // (dataUrl, maxBytes) => Promise<{url, mime, width, height} | null>
+  encodedBytes,        // (dataUrl) => base64 payload size — what providers measure
+  hasOversizedImages   // (messages, maxBytes) => boolean
 } from '@anvaka/vue-llm/providers'
 
 // Helper for creating config objects

@@ -3,13 +3,16 @@ import { convertMessagesToOpenAI, normalizeOpenAIUsage } from './OpenAIProvider.
 
 export class CustomProvider extends BaseProvider {
   async detectCapabilities() {
-    // Assume OpenAI-compatible endpoints support tools; caller opts in by passing them.
+    // Assume OpenAI-compatible endpoints support tools and image parts; the
+    // caller opts in by passing them, and the gateway's own error is more
+    // accurate than any guess we could make about an unknown model id.
     this.capabilities.add('tools')
+    this.capabilities.add('vision')
   }
   prepareRequest(messages, options) {
     const request = {
       model: options.model || this.config.model || 'gpt-3.5-turbo',
-      messages: convertMessagesToOpenAI(messages),
+      messages: convertMessagesToOpenAI(this.processMessages(messages, options)),
       max_tokens: options.maxTokens || 1000,
       stream: options.stream || false
     }

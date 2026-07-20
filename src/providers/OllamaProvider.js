@@ -1,4 +1,5 @@
 import { BaseProvider } from './BaseProvider.js'
+import { normalizeImagePart, requireInlineImage, contentText } from './imageContent.js'
 
 export class OllamaProvider extends BaseProvider {
   async detectCapabilities() {
@@ -29,7 +30,7 @@ export class OllamaProvider extends BaseProvider {
     if (!model) throw new Error('Model must be specified for Ollama requests')
     const request = {
       model,
-      messages: this.processMessages(messages, options),
+      messages: convertMessagesToOllama(this.processMessages(messages, options)),
       stream: options.stream || false,
       think: options.enableThinking || false,
       options: { temperature: options.temperature ?? 0.7, num_predict: options.maxTokens || 1000 }
@@ -42,20 +43,6 @@ export class OllamaProvider extends BaseProvider {
       request.tools = options.tools
     }
     return request
-  }
-
-  processMessages(messages, options) {
-    const converted = convertMessagesToOllama(messages)
-    if (options.images && this.capabilities.has('vision')) return this.addImagesToMessages(converted, options.images)
-    return converted
-  }
-
-  addImagesToMessages(messages, images) {
-    const lastMessage = messages[messages.length - 1]
-    if (lastMessage && lastMessage.role === 'user') {
-      lastMessage.images = images.map(img => typeof img === 'string' ? (img.startsWith('data:') ? img.split(',')[1] : img) : img)
-    }
-    return messages
   }
 
   processResponse(response) {
@@ -144,6 +131,10 @@ function normalizeArgs(args) {
 // results in OpenAI wire form `{role:'tool', tool_call_id, content}`. Ollama
 // wants `{function:{name, arguments:<object>}}` (no id, no type wrapper) and
 // `{role:'tool', content}` with no tool_call_id. Match is positional.
+//
+// Images are the odd one out here: Ollama carries them OUTSIDE content, in a
+// sibling `images` array of bare base64 strings (no `data:` prefix, no media
+// type — it sniffs the format). So a multimodal message is split, not mapped.
 export function convertMessagesToOllama(messages) {
   return messages.map(m => {
     if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) {
@@ -161,6 +152,16 @@ export function convertMessagesToOllama(messages) {
     if (m.role === 'tool') {
       const { tool_call_id, ...rest } = m
       return rest
+    }
+    // Checked last so a message that is BOTH multimodal and tool-carrying keeps
+    // its tool_calls (the branches above return first).
+    if (Array.isArray(m?.content)) {
+      const images = m.content
+        .filter(p => p?.type === 'image_url')
+        .map(p => requireInlineImage(normalizeImagePart(p).url, 'Ollama').b64)
+      const out = { ...m, content: contentText(m.content) }
+      if (images.length) out.images = images
+      return out
     }
     return m
   })

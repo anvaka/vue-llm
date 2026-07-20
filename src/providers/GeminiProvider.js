@@ -1,4 +1,5 @@
 import { BaseProvider } from './BaseProvider.js'
+import { normalizeImagePart, requireInlineImage } from './imageContent.js'
 
 export class GeminiProvider extends BaseProvider {
   async detectCapabilities() {
@@ -15,6 +16,11 @@ export class GeminiProvider extends BaseProvider {
     if (id.includes('gemini-pro') || atLeast(1, 5)) this.capabilities.add('tools')
     if (atLeast(2, 0)) this.capabilities.add('thinking')
   }
+
+  // Gemini caps the WHOLE inline request (prompt + system + image bytes) at
+  // 20 MB; above that it wants the Files API. Applied per image, which is the
+  // conservative reading — a single part can't exceed the request budget.
+  get maxImageBytes() { return 20 * 1024 * 1024 }
 
   prepareRequest(messages, options) {
     const processed = this.processMessages(messages, options)
@@ -97,33 +103,12 @@ export class GeminiProvider extends BaseProvider {
 
       const role = message.role === 'assistant' ? 'model' : 'user'
       if (Array.isArray(message.content)) {
-        const parts = message.content.map(part => {
-          if (part.type === 'text') return { text: part.text }
-          if (part.type === 'image') return { inlineData: { mimeType: part.source?.media_type || 'image/jpeg', data: part.source?.data || part.data } }
-          if (part.type === 'image_url') return { inlineData: { mimeType: 'image/jpeg', data: part.image_url.url.split(',')[1] } }
-          return { text: String(part) }
-        })
-        contents.push({ role, parts })
+        contents.push({ role, parts: message.content.map(toGeminiPart) })
       } else {
         contents.push({ role, parts: [{ text: message.content }] })
       }
     }
     return contents
-  }
-
-  processMessages(messages, options) {
-    if (options.images && this.capabilities.has('vision')) return this.addImagesToMessages(messages, options.images)
-    return messages
-  }
-
-  addImagesToMessages(messages, images) {
-    const lastMessage = messages[messages.length - 1]
-    if (lastMessage && lastMessage.role === 'user') {
-      const content = [{ type: 'text', text: lastMessage.content }]
-      images.forEach(img => content.push({ type: 'image', data: typeof img === 'string' ? img : img.data, mimeType: 'image/jpeg' }))
-      lastMessage.content = content
-    }
-    return messages
   }
 
   convertToolsToGeminiFormat(tools) {
@@ -214,6 +199,19 @@ function mapFinishReason(reason) {
 }
 
 function synthId(i) { return `gemini_call_${i}` }
+
+// Canonical content part -> Gemini part. Gemini wants the base64 payload and its
+// media type in separate fields (`inlineData`), and only dereferences a URI when
+// it points at its own Files API — an arbitrary https image URL is not accepted,
+// so requireInlineImage says so plainly instead of sending a request that 400s.
+function toGeminiPart(part) {
+  if (part?.type === 'image_url') {
+    const { mime, b64 } = requireInlineImage(normalizeImagePart(part).url, 'Gemini')
+    return { inlineData: { mimeType: mime, data: b64 } }
+  }
+  if (part?.type === 'text') return { text: part.text ?? '' }
+  return { text: String(part?.text ?? part ?? '') }
+}
 
 // Gemini's usageMetadata: promptTokenCount is the full prompt (cachedContent
 // is a subset), candidatesTokenCount includes thoughtsTokenCount on the

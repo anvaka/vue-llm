@@ -1,5 +1,6 @@
 import { createProviderFlexible } from '../providers/factory.js'
 import { calculateCost } from '../pricing/calculate.js'
+import { fitImageParts } from '../providers/imageFit.js'
 
 export class LLMClient {
   constructor({ configStore, logger, pricing } = {}) {
@@ -106,6 +107,28 @@ export class LLMClient {
     }
   }
 
+  // Shrink any image that exceeds the active provider's cap before sending.
+  //
+  // Compressing beats failing: providers reject an oversized image outright, and
+  // a phone photo is routinely over the limit, so the alternative is a request
+  // that always errors when a re-encode would have worked. No-ops when the
+  // provider publishes no cap, when nothing is over it, or off-DOM (canvas is
+  // browser-only) — so this is free for text-only calls.
+  //
+  // Pass `resizeImages: false` to send originals untouched and let the provider
+  // decide, or `onImageResize` to observe what was changed.
+  async fitImages(messages, options = {}) {
+    if (options.resizeImages === false || this.config?.resizeImages === false) return messages
+    return fitImageParts(messages, {
+      maxBytes: this.provider?.maxImageBytes,
+      quality: options.imageQuality ?? this.config?.imageQuality,
+      onResize: (info) => {
+        this.logger?.debug?.('Resized image to fit provider limit', info)
+        options.onImageResize?.(info)
+      }
+    })
+  }
+
   async ping() {
     await this.ensureInitialized()
     const messages = [
@@ -127,7 +150,7 @@ export class LLMClient {
   async stream(payload, onChunk) {
     await this.ensureInitialized()
     const validated = this.validateCapabilities({ ...payload, stream: true, model: payload.model || this.config.model, requestId: this.generateRequestId() })
-    const messages = payload.messages
+    const messages = await this.fitImages(payload.messages, payload)
     let fullContent = ''
     let fullThinking = ''
     let lastUsage = null
@@ -187,13 +210,19 @@ export class LLMClient {
     maxTokens,
     enableThinking,
     reasoningEffort,
-    signal
+    signal,
+    resizeImages,
+    imageQuality,
+    onImageResize
   } = {}) {
     await this.ensureInitialized()
     if (!this.provider.hasCapability('tools')) {
       throw new Error('Configured provider does not support tools')
     }
-    const conversation = messages.slice()
+    // Fit once up front: the loop re-sends the whole transcript every iteration,
+    // so shrinking here means an oversized image is re-encoded once rather than
+    // on each turn (and the cached prefix stays byte-identical between turns).
+    const conversation = (await this.fitImages(messages, { resizeImages, imageQuality, onImageResize })).slice()
     let iter = 0
     let stopReason = null
     // Aggregate usage across all iterations of the agent loop — a single
@@ -382,6 +411,11 @@ class StreamablePromise {
     const messages = []
     if (this.options.system) messages.push({ role: 'system', content: this.options.system })
     messages.push({ role: 'user', content: this.prompt })
+    // Same image fitting as LLMClient.stream — bound to THIS execution context's
+    // provider, which may be a preset rather than the client's active one.
+    const fitted = await this.client.fitImages.call(
+      { provider, config, logger: this.client.logger }, messages, this.options
+    )
 
     const baseOptions = {
       model: this.options.model || config.model,
@@ -397,10 +431,10 @@ class StreamablePromise {
     try {
       if (this.targetNode) {
         const streamOpts = validateCapabilities({ ...baseOptions, stream: true })
-        return await this._streamIntoTarget(messages, streamOpts, provider, config)
+        return await this._streamIntoTarget(fitted, streamOpts, provider, config)
       }
       const nonStreaming = validateCapabilities({ ...baseOptions, stream: false })
-      return await this._promiseResponse(messages, nonStreaming, provider, config)
+      return await this._promiseResponse(fitted, nonStreaming, provider, config)
     } finally {
       execCtx.cleanup?.()
     }

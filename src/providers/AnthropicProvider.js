@@ -1,5 +1,6 @@
 import { BaseProvider } from './BaseProvider.js'
 import { supportsReasoningEffort } from './reasoningPolicy.js'
+import { normalizeImagePart, parseImageUrl, requireInlineImage } from './imageContent.js'
 // The Claude-5 / Opus-4.7+ "no sampling params" rule now lives in the shared,
 // provider-agnostic policy module (samplingPolicy.js), applied via
 // BaseProvider.applySamplingParams so it covers every transport (OpenRouter,
@@ -38,7 +39,7 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   prepareRequest(messages, options) {
-    const converted = convertMessagesToAnthropic(messages)
+    const converted = convertMessagesToAnthropic(this.processMessages(messages, options), this.imageSourceMode())
     const model = options.model || this.config.model || 'claude-3-sonnet-20240229'
     const request = {
       model,
@@ -92,27 +93,18 @@ export class AnthropicProvider extends BaseProvider {
     return options?.promptCache !== false && this.config?.promptCache !== false
   }
 
-  processMessages(messages, options) {
-    if (options.images && this.capabilities.has('vision')) {
-      return this.addImagesToMessages(messages, options.images)
-    }
-    return messages
-  }
+  // Which `image.source` types this transport accepts. The native API takes
+  // base64, a remote URL, or a Files-API id; Claude routed through AWS or GCP
+  // takes base64 ONLY — `url` and `file` sources are rejected there — so the
+  // Bedrock subclasses override this to 'inline'.
+  imageSourceMode() { return 'any' }
 
-  addImagesToMessages(messages, images) {
-    const lastMessage = messages[messages.length - 1]
-    if (lastMessage && lastMessage.role === 'user') {
-      const content = [{ type: 'text', text: lastMessage.content }]
-      images.forEach(img => {
-        content.push({
-          type: 'image',
-          source: { type: 'base64', media_type: 'image/jpeg', data: typeof img === 'string' ? img : img.data }
-        })
-      })
-      lastMessage.content = content
-    }
-    return messages
-  }
+  // 5 MB per image, measured on the base64 string rather than the decoded file
+  // — verified live: a 4.8 MB photo is rejected as
+  // "image exceeds 5 MB maximum: 6755172 bytes > 5242880 bytes". Base64 inflates
+  // by 4/3, so the effective FILE limit is ~3.75 MB. Inherited by Bedrock and
+  // Mantle-Claude, which enforce the same cap.
+  get maxImageBytes() { return 5 * 1024 * 1024 }
 
   processResponse(response) {
     const finishReason = mapFinishReason(response.stop_reason)
@@ -230,12 +222,14 @@ export function normalizeAnthropicUsage(raw) {
 
 // Canonical in-memory message shape (OpenAI-flavored):
 //   { role: 'system' | 'user' | 'assistant' | 'tool',
-//     content: string,
+//     content: string | Array<ContentPart>,
 //     tool_calls?: [{ id, name, args }],   // on assistant
 //     tool_call_id?: string }              // on tool
+// where ContentPart is { type:'text', text } or
+// { type:'image_url', image_url:{ url } } — see imageContent.js.
 // Anthropic wants assistant tool_use blocks and tool_result inside user messages,
 // and has no system role inside the messages array.
-function convertMessagesToAnthropic(messages) {
+function convertMessagesToAnthropic(messages, imageSourceMode = 'any') {
   const out = []
   for (const m of messages) {
     if (m.role === 'system') continue
@@ -264,9 +258,27 @@ function convertMessagesToAnthropic(messages) {
       })
       continue
     }
-    out.push({ role: m.role, content: m.content })
+    out.push({
+      role: m.role,
+      content: Array.isArray(m.content) ? m.content.map(p => toAnthropicBlock(p, imageSourceMode)) : m.content
+    })
   }
   return out
+}
+
+// Canonical content part -> Anthropic content block. Blocks that are already in
+// Anthropic's own shape (tool_use, tool_result, a pre-built image block) pass
+// through untouched, so a caller who hand-writes native blocks isn't punished.
+function toAnthropicBlock(part, imageSourceMode) {
+  if (part?.type === 'text') return { type: 'text', text: part.text ?? '' }
+  if (part?.type !== 'image_url') return part
+  const { url } = normalizeImagePart(part)
+  const img = imageSourceMode === 'inline'
+    ? requireInlineImage(url, 'Claude on Bedrock')
+    : parseImageUrl(url)
+  return img.kind === 'data'
+    ? { type: 'image', source: { type: 'base64', media_type: img.mime, data: img.b64 } }
+    : { type: 'image', source: { type: 'url', url: img.url } }
 }
 
 function convertToolsToAnthropic(tools) {

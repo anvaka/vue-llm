@@ -1,6 +1,7 @@
 import { BaseProvider } from './BaseProvider.js'
 import { OpenAIProvider } from './OpenAIProvider.js'
 import { AnthropicProvider } from './AnthropicProvider.js'
+import { normalizeImagePart } from './imageContent.js'
 
 // Offline fallback for discovery failures. The live /v1/models call returns the
 // full catalog; this is only used when that call can't be made.
@@ -42,6 +43,10 @@ function friendlyError(e) {
 // ---- Claude: Anthropic Messages API (keeps caching/tools/vision/SSE) --------
 class MantleClaudeProvider extends AnthropicProvider {
   getApiPath() { return '/anthropic/v1/messages' }
+  // Claude routed through AWS accepts base64 image sources ONLY — the native
+  // API's `url` and `file` sources are rejected here. (The 5 MB per-image cap is
+  // measured on the base64 string, so the effective file limit is ~3.75 MB.)
+  imageSourceMode() { return 'inline' }
   buildHeaders() {
     const h = super.buildHeaders()
     delete h['anthropic-dangerous-direct-browser-access'] // Mantle allows all origins
@@ -61,6 +66,11 @@ class MantleChatProvider extends OpenAIProvider {
     // (openai.gpt-oss, qwen.*, mistral.*) don't match OpenAIProvider's gpt-4/5
     // heuristic, so declare it here. OpenAIProvider already handles the wire format.
     this.capabilities.add('tools')
+    // Same reasoning for images: the Mantle catalog spans Nova, Gemma and Qwen
+    // ids that no OpenAI-shaped policy would recognize. This surface takes an
+    // `image_url` holding a base64 data: URL (or an s3:// URI) — arbitrary
+    // public https image URLs are NOT supported here.
+    this.capabilities.add('vision')
   }
   parseModelsResponse(data) {
     return (data?.data || [])
@@ -88,6 +98,9 @@ class MantleResponsesProvider extends BaseProvider {
     // The Responses API supports function calling for the whole Mantle catalog
     // (verified live on /v1/responses and /openai/v1/responses).
     this.capabilities.add('tools')
+    // The Responses API carries images as `input_image` parts; as on the chat
+    // surface, the catalog is too broad for an id-keyed guess to help.
+    this.capabilities.add('vision')
     if (id.includes('gpt-5') || id.includes('codex') || /(^|\.)o[13]/.test(id)) {
       this.capabilities.add('thinking')
     }
@@ -97,7 +110,7 @@ class MantleResponsesProvider extends BaseProvider {
     const model = options.model || this.config.model
     const req = {
       model,
-      input: messagesToResponsesInput(messages),
+      input: messagesToResponsesInput(this.processMessages(messages, options)),
       // The Responses API rejects max_output_tokens < 16 (Chat Completions and
       // Messages accept less), so clamp — e.g. testConnection sends 10.
       max_output_tokens: Math.max(RESPONSES_MIN_OUTPUT_TOKENS, options.maxTokens || 1000),
@@ -227,6 +240,9 @@ export class BedrockMantleProvider extends BaseProvider {
     this.capabilities = this._active().capabilities
   }
   hasCapability(cap) { return this._active().hasCapability(cap) }
+  // Follows the routed transport: Claude enforces 5 MB, the OpenAI-compatible
+  // surfaces don't publish a per-image cap.
+  get maxImageBytes() { return this._active().maxImageBytes }
 
   // Defer real preparation to makeRequest/streamRequest so we can fall back
   // across API surfaces (a model's supported API isn't advertised anywhere).
@@ -318,9 +334,24 @@ function messagesToResponsesInput(messages) {
       }
       continue
     }
-    input.push({ role: m.role, content: m.content })
+    input.push({
+      role: m.role,
+      content: Array.isArray(m.content) ? m.content.map(toResponsesPart) : m.content
+    })
   }
   return input
+}
+
+// Canonical content part -> Responses typed input part. Note the Responses API
+// spells the image reference as a FLAT string (`image_url: '<url>'`), unlike
+// Chat Completions' nested `{ url }` object.
+function toResponsesPart(part) {
+  if (part?.type === 'text') return { type: 'input_text', text: part.text ?? '' }
+  if (part?.type !== 'image_url') return part
+  const { url, detail } = normalizeImagePart(part)
+  const out = { type: 'input_image', image_url: url }
+  if (detail) out.detail = detail
+  return out
 }
 
 // Tool definitions arrive in OpenAI Chat Completions shape

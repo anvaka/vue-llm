@@ -1,8 +1,8 @@
 # CLAUDE.md
 
 Orientation for agents working on `@anvaka/vue-llm`. Covers the reasoning/thinking
-subsystem in depth (it has non-obvious traps); for the rest, read `README.md` and
-the code.
+and image subsystems in depth (both have non-obvious traps); for the rest, read
+`README.md` and the code.
 
 ## What this is
 
@@ -17,6 +17,7 @@ modules; `"type": "module"`.
 npm run build          # vite lib build → dist/
 npm run demo           # playground dev server on :5178 (see demo/README.md)
 npm run test:reasoning # no-network unit tests for the effort/thinking subsystem
+npm run test:images    # no-network unit tests for image input (wire formats per provider)
 npm run test:providers # LIVE tests — hit real providers, need keys in env
 npm run test:caching   # prompt-cache tests
 ```
@@ -84,6 +85,65 @@ the effort _wire field_ is a TRANSPORT property.**
    breakdown object `{ total, ... }`, not a number. Read `cost.total`.
 
 See the memory note `bedrock-thinking-redacted` for the live-verified details.
+
+## Images (vision)
+
+Same split as reasoning: **which models can see is a MODEL property; how an image
+is spelled on the wire is a TRANSPORT property.**
+
+- `src/providers/visionPolicy.js` — the model side. `supportsVision(model)` is
+  **deny-listed**, not allow-listed, and handles the native / Bedrock
+  (`anthropic.claude-*`, `us.anthropic.*`) / OpenRouter (`anthropic/claude-*`)
+  id forms.
+- `src/providers/imageContent.js` — the shared normalizer. Canonical content is
+  either a string or an array of OpenAI-flavored parts (`{type:'text'}` /
+  `{type:'image_url', image_url:{url}}`). `parseImageUrl` splits a `data:` URL
+  into `{mime, b64}` for the providers that need the halves separately.
+- `BaseProvider.processMessages` — every `prepareRequest` calls it FIRST. It folds
+  the legacy `options.images` side channel into canonical parts and throws when a
+  model that can't see is handed an image.
+- `src/providers/imageFit.js` — compression. `LLMClient.fitImages` runs before
+  every send and shrinks anything over `provider.maxImageBytes` (base64 bytes;
+  null = no known cap). Canvas-based, so it self-disables off-DOM. `prepareRequest`
+  is SYNCHRONOUS and canvas encoding is not, which is why fitting lives in the
+  async client rather than in the provider pipeline.
+
+### Gotchas
+
+1. **Canonical parts ARE the OpenAI wire format.** OpenAI/Grok/OpenRouter/Custom/
+   llama-server need no image conversion at all. Only Anthropic, Gemini, Ollama
+   and the Responses transport convert.
+2. **Anthropic and Gemini want RAW base64 + a separate media type**, not a data
+   URL. Ollama wants raw base64 in a sibling `images` array *outside* `content`.
+   Never hand any of them the `data:` prefix.
+3. **Claude via Bedrock/Mantle accepts base64 sources ONLY** — the native API's
+   `source.type:'url'` and `'file'` are rejected there. That's what
+   `imageSourceMode()` is for; `BedrockProvider` and `MantleClaudeProvider`
+   override it to `'inline'`.
+   **The 5 MB per-image cap is measured on the BASE64 STRING**, not the decoded
+   file (verified live: `content.1.image.source.base64: image exceeds 5 MB
+   maximum: 6755172 bytes > 5242880 bytes` for a 4.8 MB file). Base64 inflates by
+   4/3, so the effective file limit is ~3.75 MB. Any size check must measure the
+   encoded length — the first attempt compared `file.size` and let everything
+   between 3.75 MB and 5 MB through. Over-cap images are COMPRESSED, not
+   rejected (`resizeImages: false` opts out).
+4. **Don't hardcode `image/jpeg`.** Every pre-rewrite implementation did, which
+   mislabeled every PNG screenshot. The media type comes from the data URL.
+5. **Don't mutate the caller's messages.** The old `addImagesToMessages` methods
+   assigned to `lastMessage.content` in place, so streaming the same conversation
+   twice corrupted its history. `attachImages` copies.
+6. **Vision detection must default open.** The old OpenAI rule
+   (`gpt-4` && `vision`) matched no current model, so vision was silently dead;
+   Grok's `grok-2` check had rotted the same way. Add to the denylist, not an
+   allowlist.
+7. **Image generation is deliberately NOT supported.** Claude can't do it at all
+   and Bedrock's image models aren't reachable from a browser; every provider that
+   can generate does so on a separate endpoint with a non-text response, which
+   nothing in `processResponse`/`streamRequest` is shaped for.
+
+`npm run test:images` covers the wire formats, the base64 size accounting, the
+compression fallbacks and the capability gating offline (gotcha 7 is a design
+decision, not a testable behavior).
 
 ## The demo
 

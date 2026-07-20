@@ -2,6 +2,7 @@
 
 import { samplingModeFor, samplingKey, recordSamplingConstraint, classifyTemperatureError, SAMPLING_MODE } from './samplingPolicy.js'
 import { resolveEffort, DEFAULT_EFFORT } from './reasoningPolicy.js'
+import { attachImages, messagesHaveImages, imagesUnsupportedError } from './imageContent.js'
 
 export class BaseProvider {
   constructor(config) {
@@ -20,6 +21,31 @@ export class BaseProvider {
 
   prepareRequest(messages, options) {
     throw new Error('prepareRequest must be implemented by subclass')
+  }
+
+  // Largest inline image this provider accepts, in BYTES OF BASE64 PAYLOAD (the
+  // unit providers actually measure — see imageFit.js). null means "no limit we
+  // know of", which leaves images untouched. LLMClient uses this to shrink
+  // over-cap images before sending instead of letting the request fail.
+  get maxImageBytes() { return null }
+
+  // Normalize the canonical message list before a provider converts it to its
+  // own wire format. Every prepareRequest calls this FIRST; the result is still
+  // canonical (see imageContent.js), never provider-specific.
+  //
+  // Two jobs, both of which used to be duplicated and wrong in five providers:
+  //  1. Fold the legacy `options.images` side channel into canonical image parts
+  //     on the last user message — without mutating the caller's array.
+  //  2. Fail loudly when the conversation carries an image a model can't see.
+  //     Silently dropping it is worse than erroring: you pay for the round trip
+  //     and get a confidently wrong answer about an image the model never saw.
+  //     This matches runAgentLoop, which already throws when tools are missing.
+  processMessages(messages, options = {}) {
+    const withImages = attachImages(messages, options.images)
+    if (messagesHaveImages(withImages) && !this.hasCapability('vision')) {
+      throw imagesUnsupportedError(options.model || this.config?.model, this.config?.provider)
+    }
+    return withImages
   }
 
   processResponse(response) {

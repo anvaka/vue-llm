@@ -5,13 +5,16 @@ export class LlamaServerProvider extends BaseProvider {
   async detectCapabilities() {
     // llama.cpp's server speaks OpenAI's chat-completions API; tool-call support
     // depends on the loaded model, so we advertise the capability and let the
-    // caller opt in by passing tools.
+    // caller opt in by passing tools. Same for vision: llama-server accepts
+    // OpenAI image parts (data: URLs included) whenever it was started with an
+    // --mmproj projector, which we can't see from here.
     this.capabilities.add('tools')
+    this.capabilities.add('vision')
   }
   prepareRequest(messages, options) {
     const request = {
       model: options.model || this.config.model || 'llama2',
-      messages: convertMessagesToOpenAI(messages),
+      messages: convertMessagesToOpenAI(this.processMessages(messages, options)),
       max_tokens: options.maxTokens || 1000,
       stream: options.stream || false
     }
