@@ -8,7 +8,7 @@
   "module": "dist/index.js",
   "scripts": {
     "build": "vite build",
-    "prepublishOnly": "npm run build",
+    "prepare": "npm run build",
     "dev": "vite build --watch",
     "demo": "vite --config demo/vite.config.js",
     "demo:build": "vite build --config demo/vite.config.js",
