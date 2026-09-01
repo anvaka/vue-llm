@@ -5,7 +5,7 @@ export { KeyStore, maskApiKey } from './core/keyStore.js'
 export { LocalStorageAdapter, MemoryStorageAdapter } from './core/storageAdapter.js'
 
 // Provider exports
-export { PROVIDERS, DEFAULT_CONFIGS, createProvider, registerProvider, createProviderFlexible } from './providers/factory.js'
+export { PROVIDERS, DEFAULT_CONFIGS, createProvider, registerProvider, createProviderFlexible, isKnownProviderType } from './providers/factory.js'
 
 // Pricing exports — `calculateCost(usage, {provider, model})` for a single
 // call, `registerPricing(provider, model, rates)` to override the built-in
