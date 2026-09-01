@@ -301,7 +301,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useLLM, createDefaultConfig } from '../useLLM.js'
-import { createProvider, DEFAULT_CONFIGS } from '../../providers/factory.js'
+import { createProvider, DEFAULT_CONFIGS, isKnownProviderType } from '../../providers/factory.js'
 import { effortLevelsFor } from '../../providers/reasoningPolicy.js'
 import StoredKeysManager from './StoredKeysManager.vue'
 
@@ -323,6 +323,7 @@ const {
   getEnabledConfigs,
   getAllConfigs,
   getActiveProviderId,
+  getActiveConfig,
   setActiveProviderId,
   saveConfig,
   deleteConfig,
@@ -621,16 +622,34 @@ const testAndSave = async () => {
     const saved = saveConfig(providerId, config.value)
     
     if (saved) {
-      if (!getActiveProviderId()) {
+      // Adopt the new provider when nothing is active — and also when whatever
+      // IS active can no longer be built. A pointer at a deleted config, or at
+      // one saved without a provider type, is not a selection worth preserving,
+      // and keeping it wedges every future save through the refresh() below.
+      const active = getActiveProviderId()
+      if (!active || !isKnownProviderType(getActiveConfig()?.provider)) {
         setActiveProviderId(providerId)
         activeProviderId.value = providerId
       }
-      
-      await refresh()
-      
-      testResult.value = { 
-        success: true, 
-        message: isEditing.value ? 'Provider updated!' : 'Provider added!' 
+
+      // This provider is SAVED and its connection has just been proven. What
+      // refresh() re-initializes, though, is the ACTIVE config — which on any
+      // add after the first is some OTHER provider. Letting that throw into the
+      // catch below reported the other config's error as though THIS provider
+      // had failed to connect, while it had in fact been stored: wrong twice,
+      // and repeated on every attempt, since nothing ever cleared the cause.
+      let activeProviderError = null
+      try {
+        await refresh()
+      } catch (error) {
+        console.warn('Saved, but the selected provider could not be started:', error)
+        activeProviderError = error.message
+      }
+
+      testResult.value = {
+        success: true,
+        message: (isEditing.value ? 'Provider updated!' : 'Provider added!')
+          + (activeProviderError ? ` Note: the selected provider still can't start — ${activeProviderError}` : '')
       }
       
       refreshProviders()

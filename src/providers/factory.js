@@ -91,6 +91,20 @@ export function registerProvider(type, providerClass) {
   _customProviders.set(type, providerClass)
 }
 
+/**
+ * Can `createProviderFlexible` actually build this type?
+ *
+ * Exists so callers can ask BEFORE constructing, instead of using a thrown
+ * "Unknown provider type" as control flow. A stored config whose provider is
+ * missing or empty — which is what an unfinished or hand-edited config looks
+ * like — is the case worth catching early, because the error it throws
+ * interpolates to nothing ("Unknown provider type:") and tells a user nothing.
+ */
+export function isKnownProviderType(providerType) {
+  if (typeof providerType !== 'string' || !providerType) return false
+  return _customProviders.has(providerType) || Object.values(PROVIDERS).includes(providerType)
+}
+
 export function createProviderFlexible(providerType, config) {
   if (_customProviders.has(providerType)) {
     const ProviderClass = _customProviders.get(providerType)

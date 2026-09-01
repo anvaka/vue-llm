@@ -1,4 +1,4 @@
-import { createProviderFlexible } from '../providers/factory.js'
+import { createProviderFlexible, isKnownProviderType } from '../providers/factory.js'
 import { calculateCost } from '../pricing/calculate.js'
 import { fitImageParts } from '../providers/imageFit.js'
 
@@ -32,6 +32,19 @@ export class LLMClient {
     if (!this.config) {
       throw new Error('LLM not configured')
     }
+    // Say WHICH config is broken and what to do about it. The factory's own
+    // message interpolates the bad type, so a config saved without one reads
+    // "Unknown provider type:" — a sentence that ends in a colon and leaves the
+    // user with nowhere to go, especially since the config at fault is usually
+    // not the one they were just working on.
+    if (!isKnownProviderType(this.config.provider)) {
+      const name = this.config.name || 'unnamed'
+      throw new Error(
+        `Provider config "${name}" does not name a usable provider ` +
+        `(provider is ${JSON.stringify(this.config.provider)}). ` +
+        `Open the provider list and re-select its type, or delete it.`
+      )
+    }
     this.provider = createProviderFlexible(this.config.provider, this.config)
     await this.provider.initialize()
     this.usageTracker = this._createUsageTracker()
@@ -42,9 +55,22 @@ export class LLMClient {
   }
 
   async refresh() {
+    // Restore on failure. Clearing both fields first and letting initialize()
+    // throw left the client with NO provider at all — strictly worse than the
+    // stale one it was replacing, and the next ensureInitialized() then threw
+    // the same error again from an unrelated stack. A failed refresh should be
+    // a no-op, not a downgrade.
+    const previousConfig = this.config
+    const previousProvider = this.provider
     this.config = null
     this.provider = null
-    await this.initialize()
+    try {
+      await this.initialize()
+    } catch (error) {
+      this.config = previousConfig
+      this.provider = previousProvider
+      throw error
+    }
   }
 
   async testConnection(tempConfig) {
