@@ -2,6 +2,15 @@ import { createProviderFlexible, isKnownProviderType } from '../providers/factor
 import { calculateCost } from '../pricing/calculate.js'
 import { fitImageParts } from '../providers/imageFit.js'
 
+// One canonical image part, in the shape fitImageParts and every provider
+// adapter already understand. Both spellings of image_url are accepted here
+// because both are accepted there.
+function isImagePart(part) {
+  if (part?.type !== 'image_url') return false
+  const raw = part.image_url
+  return typeof (typeof raw === 'string' ? raw : raw?.url) === 'string'
+}
+
 export class LLMClient {
   constructor({ configStore, logger, pricing } = {}) {
     this.configStore = configStore
@@ -317,6 +326,11 @@ export class LLMClient {
         break
       }
 
+      // Pictures a tool produced this iteration. They cannot ride the tool
+      // results themselves — those are strings, below — so they are collected
+      // here and delivered once, after every call has been answered.
+      const pendingImages = []
+
       for (const tc of toolCalls) {
         onEvent && onEvent({ type: 'tool-call', id: tc.id, name: tc.name, args: tc.args })
         const exec = executors && executors[tc.name]
@@ -332,7 +346,19 @@ export class LLMClient {
         } else {
           try {
             const out = await exec(tc.args || {})
-            resultText = typeof out === 'string' ? out : JSON.stringify(out ?? '')
+            // A tool that has BYTES worth looking at returns `{ text, images }`.
+            //
+            // Both fields are required to opt in, so this can never be confused
+            // with an ordinary object result that happens to have one of them.
+            // The text still answers the call — a tool result is a string on the
+            // wire and several providers reject anything else in a `tool`
+            // message — and the pictures are delivered separately below.
+            if (out && typeof out === 'object' && typeof out.text === 'string' && Array.isArray(out.images)) {
+              resultText = out.text
+              for (const part of out.images) if (isImagePart(part)) pendingImages.push(part)
+            } else {
+              resultText = typeof out === 'string' ? out : JSON.stringify(out ?? '')
+            }
           } catch (err) {
             resultText = `Error: ${err?.message || String(err)}`
           }
@@ -340,6 +366,41 @@ export class LLMClient {
         conversation.push({ role: 'tool', tool_call_id: tc.id, content: resultText })
         onEvent && onEvent({ type: 'tool-result', id: tc.id, name: tc.name, content: resultText })
       }
+
+      // The pictures, as their own message, AFTER every tool call has been
+      // answered. Three things about the shape are deliberate.
+      //
+      // A `user` message, not the tool result: an image part inside a `tool`
+      // message is accepted by some providers here and rejected by others,
+      // while a user message carrying image parts is the one form all of them
+      // take. It also leaves the tool_calls/tool pairing exactly as it was — a
+      // hole there 400s the next request, so a run that grew one could never be
+      // resumed.
+      //
+      // A bracketed note rather than no text: the message is in the USER's
+      // voice by necessity, and a model that reads an unannounced photograph
+      // there will answer as though the person had just sent it.
+      //
+      // And fitted, like every other image. `fitImages` runs once up front on
+      // the caller's messages precisely because the loop re-sends the whole
+      // transcript; one arriving mid-loop would otherwise be the single
+      // unresized picture in the conversation, against a provider limit that
+      // exists because pictures are large.
+      if (pendingImages.length && !signal?.aborted) {
+        const note = `[${pendingImages.length} image${pendingImages.length === 1 ? '' : 's'} returned by the tool call above]`
+        const carrier = { role: 'user', content: [{ type: 'text', text: note }, ...pendingImages] }
+        let delivered = carrier
+        try {
+          const [fitted] = await this.fitImages([carrier], { resizeImages, imageQuality, onImageResize })
+          if (fitted) delivered = fitted
+        } catch {
+          // Resizing is an optimisation; failing it must not lose the picture
+          // the tool was called to fetch.
+        }
+        conversation.push(delivered)
+        onEvent && onEvent({ type: 'tool-images', count: pendingImages.length })
+      }
+
       if (signal?.aborted) { stopReason = 'aborted'; break }
     }
     if (!stopReason) stopReason = 'max-iters'

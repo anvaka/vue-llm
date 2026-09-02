@@ -15,7 +15,8 @@
     "test:providers": "node test/providers.mjs",
     "test:caching": "node test/caching.mjs",
     "test:reasoning": "node test/reasoning.mjs",
-    "test:images": "node test/images.mjs"
+    "test:images": "node test/images.mjs",
+    "test:tool-images": "node test/tool-images.mjs"
   },
   "exports": {
     ".": {
