@@ -36,9 +36,26 @@ config)` in `factory.js` picks the class.
 
 **AWS is a router.** `BedrockMantleProvider` auto-routes each model to a transport:
 Claude → Anthropic Messages (`/anthropic/v1/messages`, via an inner
-`MantleClaudeProvider extends AnthropicProvider`), gpt-5.x → OpenAI Responses, the
-rest → OpenAI Chat Completions. So Claude-on-Bedrock inherits all AnthropicProvider
-behavior. Auth is a Bearer **API key**, not SigV4.
+`MantleClaudeProvider extends AnthropicProvider`), gpt-5 and later (gpt-5.x,
+gpt-6.x) → OpenAI Responses (`/openai/v1/responses`), the rest → OpenAI Chat
+Completions. So Claude-on-Bedrock inherits all AnthropicProvider behavior. Auth is
+a Bearer **API key**, not SigV4.
+
+Two traps in the router, both found when gpt-6 shipped on Mantle:
+- **Never test for a GPT generation with `includes('gpt-5')`.** Use
+  `isGpt5OrLater` / `gptVersion` from `samplingPolicy.js`. The literal check sat in
+  six places, so gpt-6 failed all of them at once: wrong route, no `thinking`,
+  no effort selector.
+- **The "wrong API for this model" 400 is worded differently per route**, and
+  the fallback only works for wordings it recognizes (`isUnsupportedApiError`).
+  Chat Completions says ``model `<id>` isn't supported on this route``; Responses
+  says `does not support the '/v1/responses' API`. An unrecognized wording is
+  thrown as a real failure and the other routes are never tried.
+
+OpenAI effort rungs change between point releases (gpt-5.5 rejects `max`, gpt-6
+rejects `minimal`). They are measured, not inferred — see `openAIEffortLevels`.
+The 400's own "Supported values are: …" list is the request enum, not the
+model's, so don't trust it.
 
 ## Reasoning effort + thinking (read before touching either)
 

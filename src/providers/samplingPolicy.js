@@ -67,19 +67,42 @@ export function samplingParamsRemoved(model) {
   return /claude-opus-4[-.][789]/.test(m) || /claude-(sonnet|opus|haiku|fable)-5(?!\d)/.test(m)
 }
 
+// The GPT generation number in a model id, or null. `gpt-5`, `gpt-5.5`,
+// `openai.gpt-6-astra` and `openai/gpt-6.1-sol` are 5, 5, 6 and 6; `gpt-oss-120b`
+// and `gpt-4o` are null and 4. Every "is this the gpt-5 line?" question used to be
+// `includes('gpt-5')`, so gpt-6 arrived on Bedrock Mantle answering NO to all of
+// them at once: routed to the wrong API, no thinking, no effort selector.
+export function gptGeneration(model) {
+  return gptVersion(model)?.major ?? null
+}
+
+// `{ major, minor }` from a GPT model id (minor 0 when absent), or null.
+export function gptVersion(model) {
+  const m = /(?:^|[^a-z0-9])gpt-?(\d+)(?:\.(\d+))?(?![\d])/.exec(String(model || '').toLowerCase())
+  return m ? { major: Number(m[1]), minor: m[2] ? Number(m[2]) : 0 } : null
+}
+
+// gpt-5 and every generation after it — the line that speaks `reasoning`,
+// `max_completion_tokens` and (on Mantle) only the OpenAI Responses API.
+export function isGpt5OrLater(model) {
+  const g = gptGeneration(model)
+  return g != null && g >= 5
+}
+
 // True for OpenAI reasoning models. Keyed on the model id so it works across
 // transports (native OpenAI, OpenRouter's `openai/o3-mini`, Mantle, …):
 //  - the o-series (o1…o9), covering current and future generations, anchored on
 //    (^|/) so it matches `o3-mini` and `openai/o1-preview` but NOT the trailing
 //    `o` in `gpt-4o`;
-//  - the GPT-5 reasoning line and anything explicitly tagged `reasoning`.
-// EXCLUDES `gpt-5-chat` / `gpt-5-chat-latest`, which are conversational models
-// that accept an arbitrary temperature — pinning those to 1 was a regression.
+//  - the GPT-5-and-later reasoning line and anything explicitly tagged `reasoning`.
+// EXCLUDES `gpt-<N>-chat` (`gpt-5-chat`, `gpt-5-chat-latest`), which are
+// conversational models that accept an arbitrary temperature — pinning those to 1
+// was a regression.
 export function isOpenAIReasoningModel(model) {
   const id = String(model || '').toLowerCase()
   if (/(?:^|\/)o[1-9](?:[-.]|$)/.test(id)) return true
-  if (id.includes('gpt-5') && !id.includes('gpt-5-chat')) return true
-  return id === 'gpt5' || id.includes('reasoning')
+  if (isGpt5OrLater(id) && !/gpt-?\d+-chat/.test(id)) return true
+  return id.includes('reasoning')
 }
 
 // Models that ACCEPT temperature but require it to be exactly 1:

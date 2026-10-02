@@ -1,6 +1,6 @@
 // OpenAI provider implementation (extracted)
 import { BaseProvider } from './BaseProvider.js'
-import { isOpenAIReasoningModel } from './samplingPolicy.js'
+import { isOpenAIReasoningModel, isGpt5OrLater } from './samplingPolicy.js'
 import { supportsVision } from './visionPolicy.js'
 
 export class OpenAIProvider extends BaseProvider {
@@ -13,7 +13,7 @@ export class OpenAIProvider extends BaseProvider {
     if (supportsVision(id)) {
       this.capabilities.add('vision')
     }
-    if (id.includes('gpt-4') || id.includes('gpt-3.5') || id.includes('gpt-5')) {
+    if (id.includes('gpt-4') || id.includes('gpt-3.5') || isGpt5OrLater(id)) {
       this.capabilities.add('tools')
     }
   }
@@ -49,11 +49,11 @@ export class OpenAIProvider extends BaseProvider {
 
   #requiresMaxCompletionTokens(modelId) {
     const id = (modelId || '').toLowerCase()
-    // Broader than the temperature predicate on purpose: the whole gpt-5 family
-    // (incl. the conversational gpt-5-chat, which isOpenAIReasoningModel excludes)
+    // Broader than the temperature predicate on purpose: the whole gpt-5-and-later
+    // family (incl. the conversational gpt-5-chat, which isOpenAIReasoningModel excludes)
     // uses max_completion_tokens, and any model we detected as a thinking model
     // does too.
-    return isOpenAIReasoningModel(id) || id.includes('gpt-5') || this.capabilities.has('thinking')
+    return isOpenAIReasoningModel(id) || isGpt5OrLater(id) || this.capabilities.has('thinking')
   }
 
   processResponse(response) {

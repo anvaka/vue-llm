@@ -17,11 +17,11 @@
 // means the effort UI, request building, and clamping all agree on what a given
 // model supports regardless of which provider class carries it.
 
-import { isOpenAIReasoningModel } from './samplingPolicy.js'
+import { isOpenAIReasoningModel, gptVersion } from './samplingPolicy.js'
 
 // Canonical ordering, weakest -> strongest. Used to snap a requested level to
 // the nearest one a model actually supports (clampEffort). `minimal` is
-// OpenAI-only (gpt-5); `xhigh`/`max` are Anthropic-only.
+// OpenAI-only (gpt-5); `xhigh`/`max` are shared by Claude and gpt-5.2+/gpt-6.
 const CANONICAL = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
 export const DEFAULT_EFFORT = 'medium'
@@ -46,12 +46,30 @@ export function effortLevelsFor(model) {
   if (/claude-opus-4[-.]6/.test(m)) return ['low', 'medium', 'high', 'max'] // no xhigh before 4.7
 
   // ---- OpenAI reasoning line (native, Responses, Mantle, OpenRouter) --------
-  // gpt-5 added the `minimal` rung; the o-series (o1..o9) tops out at high.
-  if (isOpenAIReasoningModel(m)) {
-    return m.includes('gpt-5') ? ['minimal', 'low', 'medium', 'high'] : ['low', 'medium', 'high']
-  }
+  if (isOpenAIReasoningModel(m)) return openAIEffortLevels(m)
 
   return null
+}
+
+// The rungs move between OpenAI point releases, and sending one a model does not
+// take is a 400 ("Unsupported value: 'minimal' is not supported with the
+// 'openai.gpt-5.5' model"). Measured on Bedrock Mantle's /openai/v1/responses,
+// 2026-10, one request per level:
+//   gpt-5.4, gpt-5.5                    low medium high xhigh       (minimal, max: 400)
+//   gpt-5.6-luna, gpt-6-*, gpt-6.1-sol  low medium high xhigh max   (minimal: 400)
+// gpt-5 (`minimal` was its addition) and gpt-5.1 are not on Mantle and come from
+// OpenAI's own docs. `none` is left out on purpose: it means "don't think", and
+// that is `enableThinking: false` here — effort is only sent when thinking is on.
+// The error's own "Supported values are: …" list is the request enum, not the
+// model's: gpt-6-astra lists 'none' and then rejects it. Don't read levels off it.
+// The o-series (o1..o9) tops out at high.
+function openAIEffortLevels(m) {
+  const v = gptVersion(m)
+  if (!v || v.major < 5) return ['low', 'medium', 'high']
+  if (v.major === 5 && v.minor === 0) return ['minimal', 'low', 'medium', 'high']
+  if (v.major === 5 && v.minor === 1) return ['low', 'medium', 'high']
+  if (v.major === 5 && v.minor <= 5) return ['low', 'medium', 'high', 'xhigh']
+  return ['low', 'medium', 'high', 'xhigh', 'max']
 }
 
 // True when the model exposes a graded reasoning-effort control (so the config
