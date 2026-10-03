@@ -391,8 +391,13 @@ export function normalizeResponsesUsage(raw) {
   const outputTokens = raw.output_tokens ?? 0
   const out = { inputTokens, outputTokens, totalTokens: raw.total_tokens ?? (inputTokens + outputTokens), raw }
   const cached = raw.input_tokens_details?.cached_tokens
+  // gpt-5.6+/gpt-6 bill a cache WRITE at 1.25× input. Like cached_tokens it is a
+  // SUBSET of input_tokens (measured: 11,191 written of 11,193 input), which is
+  // the shape calculateCost already assumes for Anthropic's cache_creation.
+  const cacheWrite = raw.input_tokens_details?.cache_write_tokens
   const reasoning = raw.output_tokens_details?.reasoning_tokens
   if (cached != null) out.cachedInputTokens = cached
+  if (cacheWrite) out.cacheCreationInputTokens = cacheWrite
   if (reasoning != null) out.reasoningTokens = reasoning
   return out
 }

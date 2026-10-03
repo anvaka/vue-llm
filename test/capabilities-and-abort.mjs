@@ -14,7 +14,8 @@
 // Run: node test/capabilities-and-abort.mjs
 
 import { AnthropicProvider } from '../src/providers/AnthropicProvider.js'
-import { BedrockMantleProvider } from '../src/providers/BedrockMantleProvider.js'
+import { BedrockMantleProvider, normalizeResponsesUsage } from '../src/providers/BedrockMantleProvider.js'
+import { calculateCost } from '../src/pricing/calculate.js'
 import { CustomProvider } from '../src/providers/CustomProvider.js'
 import { LLMClient } from '../src/core/LLMClient.js'
 
@@ -141,6 +142,23 @@ console.log('\nMantle router: gpt-6 routing')
   await r.initialize()
   check('gpt-6 declares thinking (effort selector offered)', r.hasCapability('thinking'))
   check('gpt-6 declares tools', r.hasCapability('tools'))
+}
+
+// ── 2c. Mantle cost: a cache WRITE is billed at 1.25× input ─────────────────
+// The usage below is a real first turn on openai.gpt-6-luna (2026-10). The
+// write was dropped by normalizeResponsesUsage, so the call priced every written
+// token at the plain input rate.
+console.log('\nMantle cost: cache writes')
+{
+  const raw = { input_tokens: 11193, input_tokens_details: { cache_write_tokens: 11191, cached_tokens: 0 }, output_tokens: 5, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 11198 }
+  const usage = normalizeResponsesUsage(raw)
+  check('cache_write_tokens surfaces as cacheCreationInputTokens', usage.cacheCreationInputTokens === 11191)
+  const cost = calculateCost(usage, { provider: 'bedrock', model: 'openai.gpt-6-luna' })
+  const expected = (2 * 0.10 + 11191 * 0.125 + 5 * 0.50) / 1e6
+  check('the write is priced at the cache-write rate', Math.abs(cost.total - expected) < 1e-12, `$${cost.total.toFixed(8)}`)
+  check('dated Mantle ids find their row', !!calculateCost(usage, { provider: 'bedrock', model: 'openai.gpt-5.5-2026-04-23' }))
+  check('gpt-6.1-sol does not fall back to the gpt-6-sol row',
+    calculateCost({ inputTokens: 1e6, cachedInputTokens: 1e6 }, { provider: 'bedrock', model: 'openai.gpt-6.1-sol' }).total === 0.10)
 }
 
 // ── 3. runAgentLoop abort ──────────────────────────────────────────────────
