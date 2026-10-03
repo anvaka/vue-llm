@@ -2,6 +2,8 @@ import { BaseProvider } from './BaseProvider.js'
 import { OpenAIProvider } from './OpenAIProvider.js'
 import { AnthropicProvider } from './AnthropicProvider.js'
 import { normalizeImagePart } from './imageContent.js'
+import { isGpt5OrLater } from './samplingPolicy.js'
+import { supportsReasoningEffort } from './reasoningPolicy.js'
 
 // Offline fallback for discovery failures. The live /v1/models call returns the
 // full catalog; this is only used when that call can't be made.
@@ -16,18 +18,25 @@ export const BEDROCK_MANTLE_CLAUDE_MODELS = [
 // On Mantle each model accepts exactly one API family, and /v1/models does NOT
 // advertise which — verified live:
 //   Claude               -> /anthropic/v1/messages   (only)
-//   gpt-5.x / codex       -> /openai/v1/responses      (Responses only)
-//   gpt-oss & most others -> /v1/chat/completions      (some also /v1/responses)
-// So the router picks a candidate order per model and falls back on the
-// "does not support the '<path>' API" 400.
+//   gpt-5.x, gpt-6.x / codex -> /openai/v1/responses   (Responses only)
+//   gpt-oss & most others    -> /v1/chat/completions   (some also /v1/responses)
+// So the router picks a candidate order per model and falls back on a "wrong API
+// for this model" 400. AWS words that 400 differently per route (verified live,
+// 2026-10): /v1/responses says "does not support the '/v1/responses' API", while
+// /v1/chat/completions now says "model `<id>` isn't supported on this route".
+// Both must be recognized — an unrecognized one is thrown as a real failure and
+// the remaining routes are never tried.
 export function isMantleClaudeModel(model) {
   return typeof model === 'string' && model.includes('anthropic.claude')
 }
+// gpt-5 and every later generation (gpt-6-astra, gpt-6.1-sol, …). This used to be
+// /openai\.gpt-5/, which sent every gpt-6 to Chat Completions first.
 function isFrontierOpenAIModel(model) {
-  return typeof model === 'string' && (/openai\.gpt-5/.test(model) || /codex/.test(model))
+  return typeof model === 'string' && ((model.includes('openai.') && isGpt5OrLater(model)) || /codex/.test(model))
 }
-function isUnsupportedApiError(e) {
-  return /does not support the '[^']*' API/i.test(e?.message || '')
+export function isUnsupportedApiError(e) {
+  const msg = e?.message || ''
+  return /does not support the '[^']*' API/i.test(msg) || /(?:isn't|is not) supported on this route/i.test(msg)
 }
 // Turn account-entitlement failures into an actionable message.
 function friendlyError(e) {
@@ -101,7 +110,7 @@ class MantleResponsesProvider extends BaseProvider {
     // The Responses API carries images as `input_image` parts; as on the chat
     // surface, the catalog is too broad for an id-keyed guess to help.
     this.capabilities.add('vision')
-    if (id.includes('gpt-5') || id.includes('codex') || /(^|\.)o[13]/.test(id)) {
+    if (isGpt5OrLater(id) || id.includes('codex') || /(^|\.)o[13]/.test(id) || supportsReasoningEffort(id)) {
       this.capabilities.add('thinking')
     }
   }
@@ -382,8 +391,13 @@ export function normalizeResponsesUsage(raw) {
   const outputTokens = raw.output_tokens ?? 0
   const out = { inputTokens, outputTokens, totalTokens: raw.total_tokens ?? (inputTokens + outputTokens), raw }
   const cached = raw.input_tokens_details?.cached_tokens
+  // gpt-5.6+/gpt-6 bill a cache WRITE at 1.25× input. Like cached_tokens it is a
+  // SUBSET of input_tokens (measured: 11,191 written of 11,193 input), which is
+  // the shape calculateCost already assumes for Anthropic's cache_creation.
+  const cacheWrite = raw.input_tokens_details?.cache_write_tokens
   const reasoning = raw.output_tokens_details?.reasoning_tokens
   if (cached != null) out.cachedInputTokens = cached
+  if (cacheWrite) out.cacheCreationInputTokens = cacheWrite
   if (reasoning != null) out.reasoningTokens = reasoning
   return out
 }

@@ -19,6 +19,16 @@
 
 export const DEFAULT_RATES = {
   openai: {
+    // GPT-6 / GPT-5.6 — OpenAI's pricing page, Oct 2026, short-context tier.
+    // These are the first OpenAI models that bill a cache WRITE (1.25× input);
+    // their long-context tier is 2× input and 1.5× output and is not modelled here.
+    'gpt-6.1-sol':   { input: 2.00,  output: 10.00, cachedInput: 0.10, cacheCreation: 2.50 },
+    'gpt-6-sol':     { input: 2.00,  output: 10.00, cachedInput: 0.20, cacheCreation: 2.50 },
+    'gpt-6-luna':    { input: 0.10,  output:  0.50, cachedInput: 0.01, cacheCreation: 0.125 },
+    'gpt-6-astra':   { input: 10.00, output: 50.00, cachedInput: 1.00, cacheCreation: 12.50 },
+    'gpt-5.6-sol':   { input: 4.00,  output: 20.00, cachedInput: 0.40, cacheCreation: 5.00 },
+    'gpt-5.6-terra': { input: 2.00,  output: 12.00, cachedInput: 0.20, cacheCreation: 2.50 },
+    'gpt-5.6-luna':  { input: 0.20,  output:  1.20, cachedInput: 0.02, cacheCreation: 0.25 },
     // Flagship + workhorse (April–May 2026 lineup)
     'gpt-5.5-pro':  { input: 5.00,  output: 30.00, cachedInput: 0.50 },
     'gpt-5.5':      { input: 5.00,  output: 30.00, cachedInput: 0.50 },
@@ -82,9 +92,31 @@ export const DEFAULT_RATES = {
     'anthropic.claude-sonnet-4-6':    { input: 3.00, output: 15.00, cachedInput: 0.30, cacheCreation: 3.75 },
     'anthropic.claude-sonnet-4-5':    { input: 3.00, output: 15.00, cachedInput: 0.30, cacheCreation: 3.75 },
     'anthropic.claude-haiku-4-5':     { input: 1.00, output:  5.00, cachedInput: 0.10, cacheCreation: 1.25 },
-    // OpenAI frontier via /openai/v1/responses (usage billed on input/output tokens)
-    'openai.gpt-5.5':                 { input: 5.00, output: 30.00, cachedInput: 0.50 },
-    'openai.gpt-5.4':                 { input: 5.00, output: 30.00, cachedInput: 0.50 }
+    // OpenAI frontier via /openai/v1/responses. Verified Oct 2026: AWS's public
+    // Price List (AmazonBedrockFoundationModels, us-east-1) lists GPT-6 Astra at
+    // 10 / 1 / 12.50 / 50 on its GLOBAL tier — exactly OpenAI's list price — and
+    // AWS announced GPT-5.6 Sol at $4 / $20, also OpenAI's list price. The other
+    // ids are not in AWS's published files, so they carry OpenAI's list price on
+    // that evidence. AWS's REGIONAL ("standard") tier is +10% on every Astra row;
+    // which tier a Mantle call is billed on is not in the response. Long-context
+    // tiers (2× input) are not modelled. gpt-5.6-sol's $4 / $20 is a reduction
+    // AWS guarantees only "at least through November 21, 2026".
+    'openai.gpt-6.1-sol':             { input: 2.00,  output: 10.00, cachedInput: 0.10, cacheCreation: 2.50 },
+    'openai.gpt-6-sol':               { input: 2.00,  output: 10.00, cachedInput: 0.20, cacheCreation: 2.50 },
+    'openai.gpt-6-luna':              { input: 0.10,  output:  0.50, cachedInput: 0.01, cacheCreation: 0.125 },
+    'openai.gpt-6-astra':             { input: 10.00, output: 50.00, cachedInput: 1.00, cacheCreation: 12.50 },
+    'openai.gpt-5.6-sol':             { input: 4.00,  output: 20.00, cachedInput: 0.40, cacheCreation: 5.00 },
+    'openai.gpt-5.6-terra':           { input: 2.00,  output: 12.00, cachedInput: 0.20, cacheCreation: 2.50 },
+    'openai.gpt-5.6-luna':            { input: 0.20,  output:  1.20, cachedInput: 0.02, cacheCreation: 0.25 },
+    'openai.gpt-5.5':                 { input: 5.00,  output: 30.00, cachedInput: 0.50 },
+    // Was 5 / 30 / 0.50 — a copy of the 5.5 row. OpenAI lists gpt-5.4 at half that.
+    'openai.gpt-5.4':                 { input: 2.50,  output: 15.00, cachedInput: 0.25 },
+    // Open-weight models, straight from AWS's Price List (AmazonBedrock,
+    // us-east-1, the `-mantle-…-standard` rows). No cache pricing is published.
+    'openai.gpt-oss-120b':            { input: 0.15, output: 0.60 },
+    'openai.gpt-oss-20b':             { input: 0.07, output: 0.30 },
+    'openai.gpt-oss-safeguard-120b':  { input: 0.15, output: 0.60 },
+    'openai.gpt-oss-safeguard-20b':   { input: 0.07, output: 0.20 }
   },
 
   gemini: {

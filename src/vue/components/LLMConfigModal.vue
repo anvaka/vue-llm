@@ -303,6 +303,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useLLM, createDefaultConfig } from '../useLLM.js'
 import { createProvider, DEFAULT_CONFIGS, isKnownProviderType } from '../../providers/factory.js'
 import { effortLevelsFor } from '../../providers/reasoningPolicy.js'
+import { isGpt5OrLater } from '../../providers/samplingPolicy.js'
 import StoredKeysManager from './StoredKeysManager.vue'
 
 const props = defineProps({
@@ -441,7 +442,7 @@ const isFixedTemperature = computed(() => {
   return (
     modelCapabilities.value.has('thinking') ||
     id.startsWith('o1') || id.startsWith('o2') || id.startsWith('o3') || id.startsWith('o-') ||
-    id.includes('gpt-5') || id === 'gpt5' || id.includes('reasoning')
+    isGpt5OrLater(id) || id.includes('reasoning')
   )
 })
 

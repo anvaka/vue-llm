@@ -46,6 +46,20 @@ assert.equal(effortLevelsFor('gpt-5-chat'), null)
 assert.equal(effortLevelsFor('gpt-4o'), null)
 ok('gpt-5 (+minimal), o-series (low..high), gpt-5-chat/gpt-4o none')
 
+// The rungs move between point releases; each list below is what Bedrock Mantle
+// accepted one request per level (2026-10). Sending a rung outside it is a 400.
+assert.deepEqual(effortLevelsFor('openai.gpt-5.4'), ['low', 'medium', 'high', 'xhigh'])
+assert.deepEqual(effortLevelsFor('openai.gpt-5.5'), ['low', 'medium', 'high', 'xhigh'])
+assert.deepEqual(effortLevelsFor('openai.gpt-5.6-luna'), ['low', 'medium', 'high', 'xhigh', 'max'])
+assert.deepEqual(effortLevelsFor('openai.gpt-6-astra'), ['low', 'medium', 'high', 'xhigh', 'max'])
+assert.deepEqual(effortLevelsFor('openai.gpt-6.1-sol'), ['low', 'medium', 'high', 'xhigh', 'max'])
+assert.deepEqual(effortLevelsFor('openai/gpt-6-sol'), ['low', 'medium', 'high', 'xhigh', 'max'])
+assert.deepEqual(effortLevelsFor('gpt-5.1-codex'), ['low', 'medium', 'high'])
+assert.equal(effortLevelsFor('openai.gpt-oss-120b'), null)
+assert.equal(resolveEffort('minimal', 'openai.gpt-6-astra'), 'low', 'gpt-6 400s on minimal')
+assert.equal(resolveEffort('max', 'openai.gpt-5.5'), 'xhigh', 'gpt-5.5 400s on max')
+ok('gpt-5.4+/gpt-6 (no minimal; xhigh, and max from 5.6), gpt-oss none')
+
 assert.deepEqual(effortLevelsFor('anthropic/claude-opus-4.7'), ['low', 'medium', 'high', 'xhigh', 'max'])
 ok('proxy dot-form id (OpenRouter) resolves same as native')
 

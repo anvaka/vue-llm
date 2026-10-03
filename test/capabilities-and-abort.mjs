@@ -14,7 +14,8 @@
 // Run: node test/capabilities-and-abort.mjs
 
 import { AnthropicProvider } from '../src/providers/AnthropicProvider.js'
-import { BedrockMantleProvider } from '../src/providers/BedrockMantleProvider.js'
+import { BedrockMantleProvider, normalizeResponsesUsage } from '../src/providers/BedrockMantleProvider.js'
+import { calculateCost } from '../src/pricing/calculate.js'
 import { CustomProvider } from '../src/providers/CustomProvider.js'
 import { LLMClient } from '../src/core/LLMClient.js'
 
@@ -102,6 +103,62 @@ console.log('\nMantle router capability staleness')
   check('fallback actually happened', p._resolved.get(cfg.model) === p._responses)
   check('tools survive the fallback', p.hasCapability('tools'))
   check('the shared capability set follows the winning transport', p.capabilities.has('tools'))
+}
+
+// ── 2b. Mantle router: gpt-6 reaches the Responses route ──────────────────
+// Two bugs, either one enough to break it. The route order only put
+// /openai\.gpt-5/ on /openai/v1/responses first, so gpt-6 started on Chat
+// Completions. And AWS refuses there with a NEW wording the fallback did not
+// know, so the refusal was thrown as a real failure and no other route was
+// tried. The strings below are the live ones (2026-10).
+console.log('\nMantle router: gpt-6 routing')
+{
+  const CHAT_400 = "model `openai.gpt-6-astra` isn't supported on this route"
+  const RESP_400 = "The model 'openai.gpt-6-astra' does not support the '/v1/responses' API"
+  const model = 'openai.gpt-6-astra'
+  const cfg = { model, baseUrl: 'https://example.invalid', apiKey: 'k' }
+
+  const p = new BedrockMantleProvider(cfg)
+  check('gpt-6 tries /openai/v1/responses first', p._order(model)[0] === p._openaiResponses)
+  check('gpt-6.1 too', p._order('openai.gpt-6.1-sol')[0] === p._openaiResponses)
+  check('gpt-oss still starts on chat completions', p._order('openai.gpt-oss-120b')[0] === p._chat)
+
+  // Control: start gpt-6 on chat (the old order) and the old matcher gives up.
+  const oldMatcher = (e) => /does not support the '[^']*' API/i.test(e?.message || '')
+  check('control: old matcher does not recognize the chat-route 400 (bug reproduces)', !oldMatcher(new Error(CHAT_400)))
+
+  // Fallback with the new matcher, even from the WORST order: every route stubbed
+  // with the wording AWS actually sends, only /openai/v1/responses succeeds.
+  const q = new BedrockMantleProvider(cfg)
+  await q.initialize()
+  q._order = () => [q._chat, q._responses, q._openaiResponses]
+  q._chat.streamRequest = async () => { throw new Error(CHAT_400) }
+  q._responses.streamRequest = async () => { throw new Error(RESP_400) }
+  q._openaiResponses.streamRequest = async () => ({ content: 'ok', toolCalls: [], usage: null })
+  const out = await q.streamRequest([{ role: 'user', content: 'hi' }], { model }, () => {})
+  check('falls back across both 400 wordings', out?.content === 'ok' && q._resolved.get(model) === q._openaiResponses)
+
+  const r = new BedrockMantleProvider(cfg)
+  await r.initialize()
+  check('gpt-6 declares thinking (effort selector offered)', r.hasCapability('thinking'))
+  check('gpt-6 declares tools', r.hasCapability('tools'))
+}
+
+// ── 2c. Mantle cost: a cache WRITE is billed at 1.25× input ─────────────────
+// The usage below is a real first turn on openai.gpt-6-luna (2026-10). The
+// write was dropped by normalizeResponsesUsage, so the call priced every written
+// token at the plain input rate.
+console.log('\nMantle cost: cache writes')
+{
+  const raw = { input_tokens: 11193, input_tokens_details: { cache_write_tokens: 11191, cached_tokens: 0 }, output_tokens: 5, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 11198 }
+  const usage = normalizeResponsesUsage(raw)
+  check('cache_write_tokens surfaces as cacheCreationInputTokens', usage.cacheCreationInputTokens === 11191)
+  const cost = calculateCost(usage, { provider: 'bedrock', model: 'openai.gpt-6-luna' })
+  const expected = (2 * 0.10 + 11191 * 0.125 + 5 * 0.50) / 1e6
+  check('the write is priced at the cache-write rate', Math.abs(cost.total - expected) < 1e-12, `$${cost.total.toFixed(8)}`)
+  check('dated Mantle ids find their row', !!calculateCost(usage, { provider: 'bedrock', model: 'openai.gpt-5.5-2026-04-23' }))
+  check('gpt-6.1-sol does not fall back to the gpt-6-sol row',
+    calculateCost({ inputTokens: 1e6, cachedInputTokens: 1e6 }, { provider: 'bedrock', model: 'openai.gpt-6.1-sol' }).total === 0.10)
 }
 
 // ── 3. runAgentLoop abort ──────────────────────────────────────────────────
